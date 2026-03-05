@@ -2,11 +2,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { ProcesadorFormularios, ProcessingOptions } from './procesador';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -42,10 +38,11 @@ app.post('/api/process', async (req: Request, res: Response): Promise<void> => {
         console.log("Iniciando procesamiento backend...");
         const result = await procesador.processUrls(options);
         
+        console.log(`Procesamiento finalizado. Exitosos: ${result.procesadosExitosamente}, Errores: ${result.conErrores}`);
         res.json(result);
     } catch (error: any) {
         console.error("Error global en procesamiento:", error);
-        res.status(500).json({ error: 'Error del servidor procesando los formularios.', detals: error.message });
+        res.status(500).json({ error: 'Error del servidor procesando los formularios.', detalles: error?.message || String(error) });
     }
 });
 
@@ -54,8 +51,8 @@ app.get('/api/preload-urls', (req: Request, res: Response): void => {
         // Try different paths depending on whether we are in Vercel or local
         const pathsToTry = [
             path.join(process.cwd(), 'urls.txt'),
-            path.join(__dirname, '../urls.txt'),
-            path.join(__dirname, '../../urls.txt')
+            path.join(process.cwd(), 'api', 'urls.txt'),
+            path.join(process.cwd(), '../urls.txt')
         ];
         
         let filePath = pathsToTry.find(p => fs.existsSync(p));

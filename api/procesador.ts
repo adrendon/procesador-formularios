@@ -1,5 +1,4 @@
 import axios from 'axios';
-import fs from 'fs/promises';
 
 // Tipos para estructurar nuestra información
 interface ErrorProcesamiento {
@@ -65,7 +64,7 @@ export class ProcesadorFormularios {
             }
 
             const response = await axios.get(url, {
-                timeout: 10000,
+                timeout: 5000, // Menor que el límite de 10s de Vercel para al menos devolver respuesta
                 headers: {
                     'User-Agent': 'ProcesadorFormularios/2.0'
                 }
@@ -224,7 +223,11 @@ export class ProcesadorFormularios {
     }
 
     public async processUrls(options: ProcessingOptions): Promise<InformeGeneral> {
-        const uniqueUrls = [...new Set(options.formUrls)].filter(u => typeof u === 'string' && u.trim() !== "");
+        // Limpiamos las URLs de posibles comillas, espacios y descartamos vacías
+        const cleanUrls = options.formUrls
+            .map(u => typeof u === 'string' ? u.replace(/['"]/g, '').trim() : '')
+            .filter(u => u !== '');
+        const uniqueUrls = [...new Set(cleanUrls)];
         const total = uniqueUrls.length;
         
         const info: InformeGeneral = {
@@ -244,52 +247,55 @@ export class ProcesadorFormularios {
              info.filtrosAplicados.push({ tipo: "Extracción", valor: "Tipos de Documento (enumNames)" });
         }
 
-        for (let i = 0; i < total; i++) {
-            const currentUrl = uniqueUrls[i];
-            const fetchResult = await this.goFetchUrl(currentUrl, i, total);
+        const BATCH_SIZE = 50; // Fetch hasta 50 URLs a la vez para acelerar y evitar Vercel Timeout (10s)
+        for (let i = 0; i < total; i += BATCH_SIZE) {
+            const currentBatch = uniqueUrls.slice(i, i + BATCH_SIZE);
+            const batchPromises = currentBatch.map((url, idx) => this.goFetchUrl(url, i + idx, total));
+            const batchResults = await Promise.all(batchPromises);
 
-            if (fetchResult.error) {
-                info.errores.push({ url: currentUrl, error: fetchResult.error });
-                info.conErrores++;
-                continue;
-            }
+            for (const fetchResult of batchResults) {
+                if (fetchResult.error) {
+                    info.errores.push({ url: fetchResult.url, error: fetchResult.error });
+                    info.conErrores++;
+                    continue;
+                }
 
-            const data = fetchResult.data;
-            const formTitle = data.title || data.name || "Formulario sin título";
-            const foundComponents: ComponenteEncontrado[] = [];
-            
-            // Si el objeto principal tiene properties / components
-            if (data.components) {
-                this.walkAndFilter(data.components, 'root', foundComponents, options);
-            } else {
-                this.walkAndFilter(data, 'root', foundComponents, options);
-            }
+                const data = fetchResult.data;
+                const formTitle = data.title || data.name || "Formulario sin título";
+                const foundComponents: ComponenteEncontrado[] = [];
+                
+                // Si el objeto principal tiene properties / components
+                if (data.components) {
+                    this.walkAndFilter(data.components, 'root', foundComponents, options);
+                } else {
+                    this.walkAndFilter(data, 'root', foundComponents, options);
+                }
 
-            if (foundComponents.length > 0) {
-                // Separar los que son especificos de documento si se pidio
-                const extractedTipos: any[] = [];
-                if (options.filters.searchTiposDocumento) {
-                    foundComponents.forEach(c => {
-                        if (c.enumNames) {
-                            extractedTipos.push({
-                                key: c.key,
-                                label: c.label,
-                                enumNames: c.enumNames
-                            });
-                        }
+                if (foundComponents.length > 0) {
+                    const extractedTipos: any[] = [];
+                    if (options.filters.searchTiposDocumento) {
+                        foundComponents.forEach(c => {
+                            if (c.enumNames) {
+                                extractedTipos.push({
+                                    key: c.key,
+                                    label: c.label,
+                                    enumNames: c.enumNames
+                                });
+                            }
+                        });
+                    }
+                    
+                    info.formulariosDetalle.push({
+                        url: fetchResult.url,
+                        title: formTitle,
+                        timestamp: new Date().toISOString(),
+                        componentesEncontrados: foundComponents,
+                        tipoDocumentos: extractedTipos
                     });
                 }
-                
-                info.formulariosDetalle.push({
-                    url: currentUrl,
-                    title: formTitle,
-                    timestamp: new Date().toISOString(),
-                    componentesEncontrados: foundComponents,
-                    tipoDocumentos: extractedTipos
-                });
-            }
 
-            info.procesadosExitosamente++;
+                info.procesadosExitosamente++;
+            }
         }
 
         return info;
