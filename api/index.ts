@@ -46,32 +46,8 @@ app.post('/api/process', async (req: Request, res: Response): Promise<void> => {
     }
 });
 
-app.get('/api/preload-urls', (req: Request, res: Response): void => {
-    try {
-        // Try different paths depending on whether we are in Vercel or local
-        const pathsToTry = [
-            path.join(process.cwd(), 'urls.txt'),
-            path.join(process.cwd(), 'api', 'urls.txt'),
-            path.join(process.cwd(), '../urls.txt')
-        ];
-        
-        let filePath = pathsToTry.find(p => fs.existsSync(p));
-
-        if (filePath) {
-            const content = fs.readFileSync(filePath, 'utf8');
-            res.send(content);
-        } else {
-            console.log('No se encontro el archivo urls.txt en ninguna ruta.');
-            res.status(404).send('Archivo urls.txt no encontrado en la raiz del proyecto');
-        }
-    } catch (error: any) {
-        console.error("Error leyendo urls.txt:", error);
-        res.status(500).send('Error leyendo el archivo');
-    }
-});
-
-// Development server check
-if (process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1') {
+// Development server check (Only for local development)
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     app.listen(port, () => {
         console.log(`✅ Servidor Backend corriendo en http://localhost:${port}`);   
     });

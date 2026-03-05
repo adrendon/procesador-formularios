@@ -339,7 +339,7 @@ function showToast(message: string, type: 'error' | 'success' | 'warning' = 'err
 // Preload logic
 btnPreloadUrls.addEventListener('click', async () => {
     try {
-        const response = await fetch('/api/preload-urls');
+        const response = await fetch('/urls.txt');
         if (!response.ok) {
             throw new Error('Error al cargar el archivo desde el servidor');
         }
