@@ -472,59 +472,46 @@ btnProcess.addEventListener('click', async () => {
         formulariosDetalle: [],
         errores: []
     };
+    
+    progressText.textContent = `Enviando ${urls.length} URLs al servidor...`;
+    logsList.innerHTML += `<li class="text-blue-400">⏳ Procesando lotes en el servidor...</li>`;
 
-    for (let i = 0; i < urls.length; i++) {
-        const urlToProcess = urls[i];
-        progressText.textContent = `${i + 1}/${urls.length}`;
-        
-        try {
-            const response = await fetch('/api/process', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    urls: [urlToProcess],
-                    filters: filters
-                })
-            });
+    try {
+        const response = await fetch('/api/process', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                urls: urls,
+                filters: filters
+            })
+        });
 
-            if (!response.ok) {
-                throw new Error(`Status ${response.status}`);
-            }
-
-            const data = await response.json();
-            
-            // Si el backend agregó info del filtro, la copiamos 1 sola vez
-            if (i === 0 && data.filtrosAplicados) {
-                currentResult.filtrosAplicados = data.filtrosAplicados;
-            }
-
-            if (data.conErrores > 0) {
-                currentResult.conErrores++;
-                if (data.errores && data.errores.length > 0) {
-                    currentResult.errores.push(data.errores[0]);
-                } else {
-                    currentResult.errores.push({ url: urlToProcess, error: 'Error desconocido' });
-                }
-                logsList.innerHTML += `<li class="text-red-400">❌ [ERROR] ${urlToProcess}</li>`;
-            } else {
-                currentResult.procesadosExitosamente++;
-                if (data.formulariosDetalle && data.formulariosDetalle.length > 0) {
-                    currentResult.formulariosDetalle.push(data.formulariosDetalle[0]);
-                }
-                logsList.innerHTML += `<li class="text-green-400">✅ [OK] ${urlToProcess}</li>`;
-            }
-
-        } catch (error: any) {
-            currentResult.conErrores++;
-            currentResult.errores.push({ url: urlToProcess, error: error.message });
-            logsList.innerHTML += `<li class="text-red-400">❌ [ERROR] ${urlToProcess} - ${error.message}</li>`;
+        if (!response.ok) {
+            throw new Error(`Status ${response.status}`);
         }
+
+        const data = await response.json();
         
-        // Auto-scroll logs
-        realTimeLogs.scrollTop = realTimeLogs.scrollHeight;
+        currentResult = data;
+        
+        data.errores?.forEach((err: any) => {
+            logsList.innerHTML += `<li class="text-red-400">❌ [ERROR] ${err.url} - ${err.error}</li>`;
+        });
+        
+        data.formulariosDetalle?.forEach((ok: any) => {
+            logsList.innerHTML += `<li class="text-green-400">✅ [OK] ${ok.url}</li>`;
+        });
+        
+    } catch (error: any) {
+        currentResult.conErrores = urls.length;
+        currentResult.errores.push({ url: 'Global', error: error.message });
+        logsList.innerHTML += `<li class="text-red-400">❌ [ERROR GLOBAL] ${error.message}</li>`;
     }
+    
+    // Auto-scroll logs
+    realTimeLogs.scrollTop = realTimeLogs.scrollHeight;
 
     // Al finalizar, renderizar tabla
     try {

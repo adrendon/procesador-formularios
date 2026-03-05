@@ -1,8 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
-import { ProcesadorFormularios, ProcessingOptions } from './procesador';
+import { ProcesadorFormularios, ProcessingOptions } from './procesador.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
