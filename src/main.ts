@@ -29,7 +29,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           id="urlsInput" 
           rows="8" 
           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
-          placeholder="https://test.com/form1.json\nhttps://test.com/form2.json"
+          placeholder="https://formulariosdigitales.bancolombia.com/form1.json\nhttps://formulariosdigitales.bancolombia.com/form2.json"
         ></textarea>
         <p class="mt-1 text-sm text-gray-500">Puedes pegar múltiples URLs separadas por salto de línea.</p>
       </div>
@@ -339,7 +339,7 @@ function showToast(message: string, type: 'error' | 'success' | 'warning' = 'err
 // Preload logic
 btnPreloadUrls.addEventListener('click', async () => {
     try {
-        const response = await fetch('http://localhost:3001/api/preload-urls');
+        const response = await fetch('/api/preload-urls');
         if (!response.ok) {
             throw new Error('Error al cargar el archivo desde el servidor');
         }
