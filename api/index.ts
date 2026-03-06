@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { ProcesadorFormularios, ProcessingOptions } from './procesador.js';
+import { FilterRequest, ProcesadorFormularios, ProcessingOptions } from './procesador.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -10,27 +10,29 @@ app.use(express.json({ limit: '50mb' }));
 
 app.post('/api/process', async (req: Request, res: Response): Promise<void> => {
     try {
-        const { urls, filters } = req.body;
+        const { urls, filter } = req.body;
 
         if (!urls || !Array.isArray(urls)) {
             res.status(400).json({ error: 'La propiedad "urls" debe ser un array de strings.' });
             return;
         }
 
+        if (!filter || typeof filter !== 'object' || typeof filter.type !== 'string') {
+            res.status(400).json({ error: 'La propiedad "filter" es obligatoria y debe incluir al menos un "type" válido.' });
+            return;
+        }
+
+        const normalizedFilter: FilterRequest = {
+            presetId: typeof filter.presetId === 'string' ? filter.presetId : undefined,
+            type: filter.type,
+            label: typeof filter.label === 'string' ? filter.label : filter.type,
+            params: filter.params && typeof filter.params === 'object' ? filter.params : {}
+        };
+
         const procesador = new ProcesadorFormularios();
         const options: ProcessingOptions = {
             formUrls: urls,
-            filters: {
-                searchPlaintext: filters?.searchPlaintext === true,
-                searchTiposDocumento: filters?.searchTiposDocumento === true,
-                searchGeo: filters?.searchGeo === true,
-                searchSignature: filters?.searchSignature === true,
-                searchTooltip: filters?.searchTooltip === true,
-                searchBotones: filters?.searchBotones === true,
-                searchPanels: filters?.searchPanels === true,
-                searchNombresClave: filters?.searchNombresClave === true,
-                searchFlags: filters?.searchFlags === true
-            }
+            filter: normalizedFilter
         };
 
         console.log("Iniciando procesamiento backend...");

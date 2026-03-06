@@ -1,6 +1,5 @@
 import axios from 'axios';
 
-// Tipos para estructurar nuestra información
 interface ErrorProcesamiento {
     url: string;
     error: string;
@@ -12,8 +11,8 @@ interface ComponenteEncontrado {
     type: string;
     description: string;
     validation?: string;
-    sourcePath: string; // Ruta de la propiedad
-    enumNames?: string[]; // Específico para el nuevo requerimiento
+    sourcePath: string;
+    enumNames?: string[];
 }
 
 interface ResultadoFormulario {
@@ -21,7 +20,7 @@ interface ResultadoFormulario {
     title: string;
     timestamp: string;
     componentesEncontrados: ComponenteEncontrado[];
-    tipoDocumentos: { key: string; label: string; enumNames: string[] }[]; // Extraido directamente
+    tipoDocumentos: { key: string; label: string; enumNames: string[] }[];
 }
 
 interface InformeGeneral {
@@ -37,23 +36,449 @@ interface InformeGeneral {
     errores: ErrorProcesamiento[];
 }
 
+type MatchMode = 'all' | 'any';
+type TextTarget = 'key' | 'name' | 'label' | 'placeholder' | 'title' | 'description' | 'value';
+type TermBasedFilterType = 'dropdown-with-terms' | 'fields-by-terms' | 'buttons-by-terms';
+
+const ALL_TEXT_TARGETS: TextTarget[] = ['key', 'name', 'label', 'placeholder', 'title', 'description', 'value'];
+const DEFAULT_TERM_TARGETS: TextTarget[] = ['key', 'name', 'label'];
+const HIDDEN_VISIBILITY_TOKENS = ['d-none', 'display:none', 'hidden', 'sr-only', 'visually-hidden'];
+const INTERACTIVE_TYPE_TOKENS = [
+    'input',
+    'text-input',
+    'textfield',
+    'textarea',
+    'select',
+    'dropdown',
+    'drop-down',
+    'checkbox',
+    'radio',
+    'button',
+    'submit',
+    'date',
+    'email',
+    'number',
+    'password',
+    'signature'
+];
+const PLAIN_TEXT_SCHEMA_TOKENS = ['plain-text', '/text', 'richtext', 'rich-text', 'html', 'contentfragment'];
+const INFORMATIVE_NAMING_TOKENS = [
+    'plaintext',
+    'plain-text',
+    'richtext',
+    'rich-text',
+    'html',
+    'informacion',
+    'informativo',
+    'info',
+    'message',
+    'mensaje',
+    'description',
+    'descripcion',
+    'content',
+    'disclaimer',
+    'legal'
+];
+const PLAIN_TEXT_MIN_CONTENT_LENGTH = 40;
+const DEFAULT_CHECKBOX_MIN_OPTIONS = 3;
+const FETCH_TIMEOUT_MS = 5000;
+const DROPDOWN_COMPONENT_TYPES = ['select', 'dropdown', 'drop-down'];
+const SIGNATURE_COMPONENT_TOKENS = ['signature', 'signaturepad', 'signature-pad', 'esign', 'e-sign', 'firma'];
+const SIGNATURE_FLAG_KEYS = ['signature', 'signaturetype', 'tipofirmaelectronica', 'firmaelectronica'];
+const SIGNATURE_POSITIVE_VALUES = ['yes', 'true', 'si', '1', 'simple', 'digital', 'electronica', 'electronic'];
+const SIGNATURE_NEGATIVE_VALUES = ['no', 'false', '0', 'no aplica', 'none', 'ninguno', 'n/a', 'na'];
+
+export type FilterType =
+    | 'dropdown-with-terms'
+    | 'plain-text'
+    | 'fields-by-terms'
+    | 'signature'
+    | 'tooltip'
+    | 'buttons-by-terms'
+    | 'panel-non-accordion'
+    | 'flags-by-keys'
+    | 'checkbox-group';
+
+export interface FilterRequest {
+    presetId?: string;
+    type: FilterType;
+    label?: string;
+    params?: Record<string, unknown>;
+}
+
 export interface ProcessingOptions {
     formUrls: string[];
-    filters: {
-        searchPlaintext?: boolean;
-        searchTiposDocumento?: boolean;
-        searchGeo?: boolean;
-        searchSignature?: boolean;
-        searchTooltip?: boolean;
-        searchBotones?: boolean;
-        searchPanels?: boolean;
-        searchNombresClave?: boolean;
-        searchFlags?: boolean;
-    };
+    filter: FilterRequest;
+}
+
+interface TermFilterParams {
+    terms: string[];
+    mode: MatchMode;
+    targets: TextTarget[];
+    componentTypes?: string[];
+    extractEnumNames?: boolean;
+}
+
+interface FlagFilterParams {
+    keys: string[];
+    mode: MatchMode;
+}
+
+interface CheckboxGroupParams {
+    minOptions: number;
+}
+
+interface RuntimeContext {
+    matchedTerms: Set<string>;
+    matchedFlags: Set<string>;
 }
 
 export class ProcesadorFormularios {
     private jsonCache: Map<string, any> = new Map();
+
+    private normalizeText(value: unknown): string {
+        if (value === undefined || value === null) return '';
+        return String(value)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+    }
+
+    private getLabelText(obj: any): string {
+        if (obj?.label && typeof obj.label === 'object') {
+            return obj.label.value || JSON.stringify(obj.label);
+        }
+
+        if (obj?.label !== undefined && obj?.label !== null) {
+            return String(obj.label);
+        }
+
+        return '';
+    }
+
+    private getTextByTarget(obj: any, labelText: string, target: TextTarget): string {
+        switch (target) {
+            case 'key':
+                return this.normalizeText(obj?.key);
+            case 'name':
+                return this.normalizeText(obj?.name);
+            case 'label':
+                return this.normalizeText(labelText);
+            case 'placeholder':
+                return this.normalizeText(obj?.placeholder);
+            case 'title':
+                return this.normalizeText(obj?.title);
+            case 'description':
+                return this.normalizeText(obj?.description);
+            case 'value':
+                return this.normalizeText(obj?.value);
+            default:
+                return '';
+        }
+    }
+
+    private getCheckboxOptionCount(obj: any): number {
+        const possibleArrays = [obj?.enumNames, obj?.data?.values, obj?.options, obj?.items, obj?.values];
+        return possibleArrays.reduce((maxCount: number, currentValue: any) => {
+            return Array.isArray(currentValue) ? Math.max(maxCount, currentValue.length) : maxCount;
+        }, 0);
+    }
+
+    private getEnumNames(obj: any): string[] {
+        if (Array.isArray(obj?.enumNames)) {
+            return obj.enumNames;
+        }
+
+        if (Array.isArray(obj?.data?.values)) {
+            return obj.data.values.map((value: any) => value.label || value.value).filter(Boolean);
+        }
+
+        return [];
+    }
+
+    private getNodeTypeTokens(obj: any): string[] {
+        return [obj?.type, obj?.fieldType, obj?.[':type']]
+            .map((value) => this.normalizeText(value))
+            .filter(Boolean);
+    }
+
+    private getSchemaTypeTokens(obj: any): string[] {
+        return [
+            obj?.type,
+            obj?.fieldType,
+            obj?.[':type'],
+            obj?.resourceType,
+            obj?.['sling:resourceType'],
+            obj?.['jcr:primaryType']
+        ]
+            .map((value) => this.normalizeText(value))
+            .filter(Boolean);
+    }
+
+    private getCandidateTextContent(obj: any): string[] {
+        return [
+            obj?.text,
+            obj?.html,
+            obj?.content,
+            obj?.richText,
+            obj?.value,
+            obj?.description,
+            obj?.title
+        ]
+            .filter((value): value is string => typeof value === 'string')
+            .map((value) => value.trim())
+            .filter(Boolean);
+    }
+
+    private isHiddenNode(obj: any): boolean {
+        if (obj?.hidden === true || obj?.visible === false) {
+            return true;
+        }
+
+        const visibilityTokens = [obj?.customClass, obj?.className, obj?.cssClass, obj?.style]
+            .map((value) => this.normalizeText(value))
+            .filter(Boolean)
+            .join(' | ');
+
+        return HIDDEN_VISIBILITY_TOKENS.some((token) => visibilityTokens.includes(token));
+    }
+
+    private isInteractiveInputNode(obj: any): boolean {
+        const typeTokens = this.getSchemaTypeTokens(obj);
+
+        return typeTokens.some((typeToken) => INTERACTIVE_TYPE_TOKENS.some((interactiveToken) => typeToken.includes(interactiveToken)));
+    }
+
+    private getPlainTextDescriptor(obj: any, labelText: string): { description: string; labelOverride?: string } | null {
+        if (this.isHiddenNode(obj)) {
+            return null;
+        }
+
+        const schemaTypeTokens = this.getSchemaTypeTokens(obj);
+        const primaryType = schemaTypeTokens[0] || '';
+        const namingHaystack = [obj?.key, obj?.name, labelText, obj?.title]
+            .map((value) => this.normalizeText(value))
+            .filter(Boolean)
+            .join(' | ');
+        const contentCandidates = this.getCandidateTextContent(obj);
+        const normalizedContent = contentCandidates.map((value) => this.normalizeText(value));
+        const contentPreview = contentCandidates.find((value) => value.length > 0);
+        const containsHtmlMarkup = contentCandidates.some((value) => /<[^>]+>/.test(value));
+        const hasInformativeCopy = normalizedContent.some((value) => value.length >= PLAIN_TEXT_MIN_CONTENT_LENGTH);
+        const isInteractiveInput = this.isInteractiveInputNode(obj);
+
+        const hasPlainTextSchema = schemaTypeTokens.some((token) => PLAIN_TEXT_SCHEMA_TOKENS.some((schemaToken) => token === schemaToken || token.includes(schemaToken)));
+
+        const hasInformativeNaming = INFORMATIVE_NAMING_TOKENS.some((token) => namingHaystack.includes(token));
+
+        if (hasPlainTextSchema && !isInteractiveInput) {
+            return {
+                description: `Bloque informativo detectado por esquema: ${schemaTypeTokens[0] || 'plain-text'}`,
+                labelOverride: contentPreview || obj?.title || labelText || undefined
+            };
+        }
+
+        if (containsHtmlMarkup && !isInteractiveInput) {
+            return {
+                description: 'Bloque informativo con HTML embebido',
+                labelOverride: contentPreview || obj?.title || labelText || undefined
+            };
+        }
+
+        if ((hasInformativeNaming || primaryType === 'panel' || primaryType === 'text') && hasInformativeCopy && !isInteractiveInput) {
+            return {
+                description: 'Bloque informativo detectado por naming/contenido',
+                labelOverride: contentPreview || obj?.title || labelText || undefined
+            };
+        }
+
+        return null;
+    }
+
+    private isTruthySignatureValue(value: unknown): boolean {
+        const normalizedValue = this.normalizeText(value);
+        return SIGNATURE_POSITIVE_VALUES.some((token) => normalizedValue === token || normalizedValue.includes(token));
+    }
+
+    private hasConfiguredSignatureValue(value: unknown): boolean {
+        const normalizedValue = this.normalizeText(value);
+        if (!normalizedValue) {
+            return false;
+        }
+
+        return !SIGNATURE_NEGATIVE_VALUES.includes(normalizedValue);
+    }
+
+    private getSignatureDescriptor(obj: any, labelText: string): { description: string; labelOverride?: string; pathSuffix?: string } | null {
+        const schemaTypeTokens = this.getSchemaTypeTokens(obj);
+        const namingHaystack = [obj?.key, obj?.name, labelText, obj?.title]
+            .map((value) => this.normalizeText(value))
+            .filter(Boolean)
+            .join(' | ');
+
+        const signatureComponentToken = schemaTypeTokens.find((token) => SIGNATURE_COMPONENT_TOKENS.some((signatureToken) => token.includes(signatureToken)));
+        if (signatureComponentToken) {
+            return {
+                description: `Firma detectada por componente/esquema: ${signatureComponentToken}`,
+                labelOverride: labelText || obj?.title || obj?.name || undefined
+            };
+        }
+
+        const signatureNamingToken = SIGNATURE_COMPONENT_TOKENS.find((token) => namingHaystack.includes(token));
+        if (signatureNamingToken && schemaTypeTokens.some((token) => token.includes('field') || token.includes('component') || token.includes('widget') || token.includes('input'))) {
+            return {
+                description: `Firma detectada por naming técnico: ${signatureNamingToken}`,
+                labelOverride: labelText || obj?.title || obj?.name || undefined
+            };
+        }
+
+        for (const [rawKey, rawValue] of Object.entries(obj)) {
+            const normalizedKey = this.normalizeText(rawKey).replace(/_/g, '');
+            if (!SIGNATURE_FLAG_KEYS.includes(normalizedKey)) {
+                continue;
+            }
+
+            const hasValidSignatureValue = normalizedKey === 'signature'
+                ? this.isTruthySignatureValue(rawValue)
+                : this.hasConfiguredSignatureValue(rawValue);
+
+            if (hasValidSignatureValue) {
+                return {
+                    description: `Firma detectada por flag técnico: ${rawKey}=${String(rawValue)}`,
+                    labelOverride: String(rawValue ?? 'N/A'),
+                    pathSuffix: `.${rawKey}`
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private hasAllowedComponentType(obj: any, componentTypes?: string[]): boolean {
+        if (!componentTypes || componentTypes.length === 0) return true;
+        const nodeTypeTokens = this.getNodeTypeTokens(obj);
+        const normalizedComponentTypes = componentTypes.map((componentType) => this.normalizeText(componentType));
+        return normalizedComponentTypes.some((componentType) => nodeTypeTokens.some((nodeType) => nodeType.includes(componentType)));
+    }
+
+    private parseMatchMode(value: unknown, fallback: MatchMode = 'any'): MatchMode {
+        return value === 'all' ? 'all' : value === 'any' ? 'any' : fallback;
+    }
+
+    private parseTextTargets(value: unknown, fallback: TextTarget[]): TextTarget[] {
+        if (!Array.isArray(value)) return fallback;
+        return value.filter((item): item is TextTarget => typeof item === 'string' && ALL_TEXT_TARGETS.includes(item as TextTarget));
+    }
+
+    private parseTermFilterParams(params: Record<string, unknown> | undefined, defaults: Partial<TermFilterParams> = {}): TermFilterParams {
+        const fallbackTargets: TextTarget[] = defaults.targets || DEFAULT_TERM_TARGETS;
+        const terms = Array.isArray(params?.terms)
+            ? params!.terms.map((term) => this.normalizeText(term)).filter(Boolean)
+            : [];
+
+        return {
+            terms,
+            mode: this.parseMatchMode(params?.mode, defaults.mode || 'any'),
+            targets: this.parseTextTargets(params?.targets, fallbackTargets),
+            componentTypes: Array.isArray(params?.componentTypes)
+                ? params!.componentTypes.map((componentType) => this.normalizeText(componentType)).filter(Boolean)
+                : defaults.componentTypes,
+            extractEnumNames: typeof params?.extractEnumNames === 'boolean'
+                ? params.extractEnumNames
+                : defaults.extractEnumNames
+        };
+    }
+
+    private parseFlagFilterParams(params: Record<string, unknown> | undefined): FlagFilterParams {
+        return {
+            keys: Array.isArray(params?.keys)
+                ? params!.keys.map((key) => this.normalizeText(key).replace(/_/g, '')).filter(Boolean)
+                : Array.isArray(params?.terms)
+                    ? params!.terms.map((key) => this.normalizeText(key).replace(/_/g, '')).filter(Boolean)
+                    : [],
+            mode: this.parseMatchMode(params?.mode, 'any')
+        };
+    }
+
+    private parseCheckboxGroupParams(params: Record<string, unknown> | undefined): CheckboxGroupParams {
+        const minOptions = Number(params?.minOptions);
+        return {
+            minOptions: Number.isFinite(minOptions) && minOptions >= 2 ? minOptions : DEFAULT_CHECKBOX_MIN_OPTIONS
+        };
+    }
+
+    private isTermBasedFilterType(filterType: FilterType): filterType is TermBasedFilterType {
+        return filterType === 'dropdown-with-terms'
+            || filterType === 'fields-by-terms'
+            || filterType === 'buttons-by-terms';
+    }
+
+    private getTermFilterParamsForFilter(filter: FilterRequest): TermFilterParams {
+        switch (filter.type) {
+            case 'dropdown-with-terms':
+                return this.parseTermFilterParams(filter.params, {
+                    mode: 'any',
+                    targets: DEFAULT_TERM_TARGETS,
+                    componentTypes: DROPDOWN_COMPONENT_TYPES,
+                    extractEnumNames: true
+                });
+            case 'fields-by-terms':
+                return this.parseTermFilterParams(filter.params, {
+                    mode: 'any',
+                    targets: DEFAULT_TERM_TARGETS
+                });
+            case 'buttons-by-terms':
+                return this.parseTermFilterParams(filter.params, {
+                    mode: 'any',
+                    targets: ['value', 'key', 'name', 'label']
+                });
+            default:
+                return this.parseTermFilterParams(filter.params, {
+                    mode: 'any',
+                    targets: DEFAULT_TERM_TARGETS
+                });
+        }
+    }
+
+    private getSummaryTermFilterParams(filter: FilterRequest): TermFilterParams {
+        return this.parseTermFilterParams(filter.params, {
+            mode: 'any',
+            targets: DEFAULT_TERM_TARGETS
+        });
+    }
+
+    private getMatchedTerms(obj: any, labelText: string, params: TermFilterParams): string[] {
+        if (params.terms.length === 0 || !this.hasAllowedComponentType(obj, params.componentTypes)) {
+            return [];
+        }
+
+        const haystack = params.targets
+            .map((target) => this.getTextByTarget(obj, labelText, target))
+            .filter(Boolean)
+            .join(' | ');
+
+        if (!haystack) return [];
+        return params.terms.filter((term) => haystack.includes(term));
+    }
+
+    private addFoundComponent(
+        foundComponents: ComponenteEncontrado[],
+        obj: any,
+        currentPath: string,
+        description: string,
+        fallbackType: string,
+        labelOverride?: string,
+        enumNames?: string[]
+    ) {
+        foundComponents.push({
+            key: obj?.key || obj?.name || 'N/A',
+            label: labelOverride || this.getLabelText(obj) || obj?.value || 'N/A',
+            type: obj?.type || obj?.fieldType || fallbackType,
+            description,
+            sourcePath: currentPath,
+            enumNames
+        });
+    }
 
     private async goFetchUrl(url: string, index: number, total: number): Promise<any> {
         try {
@@ -64,7 +489,7 @@ export class ProcesadorFormularios {
             }
 
             const response = await axios.get(url, {
-                timeout: 5000, // Menor que el límite de 10s de Vercel para al menos devolver respuesta
+                timeout: FETCH_TIMEOUT_MS, // Menor que el límite de 10s de Vercel para al menos devolver respuesta
                 headers: {
                     'User-Agent': 'ProcesadorFormularios/2.0'
                 }
@@ -79,146 +504,209 @@ export class ProcesadorFormularios {
     }
 
     private walkAndFilter(
-        obj: any, 
-        currentPath: string, 
+        obj: any,
+        currentPath: string,
         foundComponents: ComponenteEncontrado[],
-        options: ProcessingOptions
+        filter: FilterRequest,
+        runtimeContext: RuntimeContext
     ) {
         if (typeof obj !== 'object' || obj === null) return;
-        
+
         if (Array.isArray(obj)) {
             obj.forEach((item, index) => {
-                this.walkAndFilter(item, `${currentPath}[${index}]`, foundComponents, options);
+                this.walkAndFilter(item, `${currentPath}[${index}]`, foundComponents, filter, runtimeContext);
             });
             return;
         }
 
-        // Buscar textfield o panel content para "searchPlaintext" (el código original de flags)
-        if (options.filters.searchPlaintext) {
-             const keyToSearch = String(obj.key || obj.name || "").toLowerCase();
-             const typeToSearch = String(obj.type || obj.fieldType || "").toLowerCase();
+        const params = filter.params || {};
+        const labelText = this.getLabelText(obj);
+        const typeLower = this.normalizeText(obj?.type || obj?.fieldType || '');
+        const keyLower = this.normalizeText(obj?.key || obj?.name || '');
 
-             // match clásico de form.io
-             const isOldMatch = (obj.type === 'textfield' || obj.type === 'htmlelement' || obj.type === 'panel') && 
-                                (keyToSearch.includes('plaintext') || keyToSearch.includes('plain-text') || keyToSearch.includes('html'));
+        switch (filter.type) {
+            case 'plain-text': {
+                const plainTextMatch = this.getPlainTextDescriptor(obj, labelText);
 
-             // match de AEM adaptive forms
-             const isAemMatch = typeToSearch === 'plain-text' || 
-                                (obj[':type'] && String(obj[':type']).includes('/text') && typeToSearch !== 'text-input');
-
-             if (isOldMatch || isAemMatch) {
-                 if (obj.customClass?.includes('d-none')) {
-                     // ignore d-none
-                 } else {
-                     foundComponents.push({
-                            key: obj.key || obj.name || 'N/A',
-                            label: obj.label?.value || obj.label || 'N/A',
-                            type: obj.type || obj.fieldType || 'plain-text',
-                            description: obj.description || 'Plain Text/HTML detectado',
-                            sourcePath: currentPath
-                        });
-                 }
-             }
-        }
-
-        // Requerimiento nuevo: Componentes desplegables de "Tipo de documento" 
-        const typeLower = String(obj.fieldType || obj.type || "").toLowerCase();
-        const keyLower = String(obj.key || obj.name || "").toLowerCase();
-        
-        // Manejar obj.label de forma segura (puede ser string o un objeto con prop 'value')
-        let rawLabel = "";
-        if (obj.label && typeof obj.label === 'object') {
-            rawLabel = obj.label.value || JSON.stringify(obj.label);
-        } else if (obj.label !== undefined && obj.label !== null) {
-            rawLabel = String(obj.label);
-        }
-        const labelLower = rawLabel.toLowerCase();
-
-        if (options.filters.searchTiposDocumento) {
-            const isDropdown = obj.type === 'select' || obj.type === 'dropdown' || obj.fieldType === 'drop-down';
-            
-            const matchName = keyLower.includes('documento') || keyLower.includes('identificacion') || keyLower.includes('tipo_doc') || keyLower.includes('tipodoc') || keyLower.includes('tipo_identificacion');
-            const matchLabel = labelLower.includes('documento') || labelLower.includes('identificacion') || labelLower.includes('tipo de documento');
-
-            if (isDropdown && (matchName || matchLabel)) {
-                let enumNames: string[] = [];
-                if (Array.isArray(obj.enumNames)) {
-                    enumNames = obj.enumNames;
-                } else if (obj.data && Array.isArray(obj.data.values)) {
-                    enumNames = obj.data.values.map((v: any) => v.label || v.value);
+                if (plainTextMatch) {
+                    this.addFoundComponent(
+                        foundComponents,
+                        obj,
+                        currentPath,
+                        plainTextMatch.description,
+                        'plain-text',
+                        plainTextMatch.labelOverride
+                    );
                 }
-
-                if (enumNames.length > 0) {
-                    foundComponents.push({
-                        key: obj.key || obj.name || 'N/A',
-                        label: obj.label?.value || obj.label || 'N/A',
-                        type: obj.fieldType || obj.type || 'drop-down',
-                        description: 'Dropdown Tipo de Documento',
-                        sourcePath: currentPath,
-                        enumNames: enumNames
-                    });
-                }
+                break;
             }
-        }
 
-        // Check searchGeo
-        if (options.filters.searchGeo && (typeLower === 'select' || typeLower === 'radio' || typeLower === 'dropdown' || typeLower === 'drop-down' || typeLower === 'text-input' || typeLower === 'string')) {
-             if (keyLower.includes('pais') || keyLower.includes('país') || labelLower.includes('pais') || labelLower.includes('país') ||
-                 keyLower.includes('departa') || labelLower.includes('departa') ||
-                 keyLower.includes('estado') || labelLower.includes('estado') ||
-                 keyLower.includes('municipio') || labelLower.includes('municipio') ||
-                 keyLower.includes('ciudad') || labelLower.includes('ciudad')) {
-                 foundComponents.push({ key: obj.key || obj.name || 'N/A', label: obj.label?.value || obj.label || 'N/A', type: obj.type || obj.fieldType || 'GEO_DROPDOWN', description: 'Campo Geo (País/Depto/Ciudad)', sourcePath: currentPath });
-             }
-        }
+            case 'dropdown-with-terms': {
+                const termParams = this.getTermFilterParamsForFilter(filter);
+                const matchedTerms = this.getMatchedTerms(obj, labelText, termParams);
+                const enumNames = this.getEnumNames(obj);
 
-        // Check signature
-        if (options.filters.searchSignature && ((obj.signature && String(obj.signature).toLowerCase() === 'yes') || typeLower === 'signature')) {
-             foundComponents.push({ key: obj.key || obj.name || 'signature', label: obj.label?.value || obj.label || 'N/A', type: obj.type || obj.fieldType || 'SIGNATURE', description: 'Tiene signature: yes', sourcePath: currentPath });
-        }
+                if (matchedTerms.length > 0 && (!termParams.extractEnumNames || enumNames.length > 0)) {
+                    matchedTerms.forEach((term) => runtimeContext.matchedTerms.add(term));
+                    this.addFoundComponent(
+                        foundComponents,
+                        obj,
+                        currentPath,
+                        `Dropdown detectado por términos: ${matchedTerms.join(', ')}`,
+                        'drop-down',
+                        undefined,
+                        enumNames.length > 0 ? enumNames : undefined
+                    );
+                }
+                break;
+            }
 
-        // Check tooltip
-        const possibleTooltip = obj.tooltip || obj.helpMessage || obj.tooltipMessage || obj.shortDescription || (obj.properties && obj.properties['fd:tooltip']) || (obj.description && String(obj.description).includes('tooltip') ? obj.description : null);
-        if (options.filters.searchTooltip && possibleTooltip) {
-             foundComponents.push({ key: obj.key || obj.name || 'N/A', label: obj.label?.value || obj.label || 'N/A', type: obj.type || obj.fieldType || 'TOOLTIP', description: `Tooltip detectado en ${typeLower}`, sourcePath: currentPath });
-        }
+            case 'fields-by-terms': {
+                const termParams = this.getTermFilterParamsForFilter(filter);
+                const matchedTerms = this.getMatchedTerms(obj, labelText, termParams);
 
-        // Check botones descarga
-        if (options.filters.searchBotones && (typeLower === 'button' || obj.type === 'button' || obj.fieldType === 'button' || (obj[':type'] && String(obj[':type']).includes('/actions/')) || keyLower.includes('botón') || keyLower.includes('boton') || keyLower.includes('btn'))) {
-             const vDirect = String(obj.value || obj.name || obj.key || "").toLowerCase();
-             if (vDirect.includes('descarg') || vDirect.includes('previsualiz') || labelLower.includes('descarg') || labelLower.includes('previsualiz') || vDirect.includes('download')) {
-                 foundComponents.push({ key: obj.key || obj.name || 'N/A', label: obj.label?.value || obj.label || obj.value || 'N/A', type: obj.type || obj.fieldType || 'BOTON_ESPECIAL', description: 'Botón Descarga/Previsualizar', sourcePath: currentPath });
-             }
-        }
+                if (matchedTerms.length > 0) {
+                    matchedTerms.forEach((term) => runtimeContext.matchedTerms.add(term));
+                    this.addFoundComponent(foundComponents, obj, currentPath, `Campo detectado por términos: ${matchedTerms.join(', ')}`, 'CAMPO_POR_TERMINOS');
+                }
+                break;
+            }
 
-        // Check panels no accordion
-        if (options.filters.searchPanels && typeLower === 'panel' && !String(obj.name || "").toLowerCase().includes('accordion')) {
-             foundComponents.push({ key: obj.key || obj.name || 'N/A', label: obj.label?.value || obj.label || 'N/A', type: obj.type || obj.fieldType || 'PANEL', description: 'Panel (No accordion)', sourcePath: currentPath });
-        }
+            case 'signature': {
+                const signatureMatch = this.getSignatureDescriptor(obj, labelText);
 
-        // Check Nombres Clave
-        if (options.filters.searchNombresClave) {
-             const claves = ['tipo_documento','no_identificacion','nombre','primer_nombre','segundo_nombre','primer_apellido','segundo_apellido'];
-             if (claves.some(c => keyLower.includes(c))) {
-                 foundComponents.push({ key: obj.key || obj.name || 'N/A', label: obj.label?.value || obj.label || 'N/A', type: obj.type || 'NOMBRE_CLAVE', description: 'Nombre Clave Detectado', sourcePath: currentPath });
-             }
-        }
+                if (signatureMatch) {
+                    this.addFoundComponent(
+                        foundComponents,
+                        obj,
+                        signatureMatch.pathSuffix ? `${currentPath}${signatureMatch.pathSuffix}` : currentPath,
+                        signatureMatch.description,
+                        'SIGNATURE',
+                        signatureMatch.labelOverride
+                    );
+                }
+                break;
+            }
 
-        // Check Flags Especiales en las claves
-        if (options.filters.searchFlags) {
-             const flags = ['signature', 'signaturetype', 'autentificacion', 'precarga', 'pdfadjunto', 'tipofirmaelectronica'];
-             // Buscar en cualquier llave las keys relacionadas
-             for (const k in obj) {
-                 const lowk = k.toLowerCase().replace(/_/g, '');
-                 if (flags.includes(lowk)) {
-                     foundComponents.push({ key: k, label: obj[k] ? String(obj[k]) : 'N/A', type: 'FLAG', description: `Flag especial: ${k}=${obj[k]}`, sourcePath: currentPath });
-                 }
-             }
+            case 'tooltip': {
+                const possibleTooltip = obj?.tooltip
+                    || obj?.helpMessage
+                    || obj?.tooltipMessage
+                    || obj?.shortDescription
+                    || (obj?.properties && obj.properties['fd:tooltip'])
+                    || (obj?.description && String(obj.description).includes('tooltip') ? obj.description : null);
+                if (possibleTooltip) {
+                    this.addFoundComponent(foundComponents, obj, currentPath, `Tooltip detectado en ${typeLower || 'componente'}`, 'TOOLTIP');
+                }
+                break;
+            }
+
+            case 'buttons-by-terms': {
+                const termParams = this.getTermFilterParamsForFilter(filter);
+                const matchedTerms = this.getMatchedTerms(obj, labelText, termParams);
+                const isButtonLike = typeLower === 'button'
+                    || this.getNodeTypeTokens(obj).some((token) => token.includes('/actions/'))
+                    || keyLower.includes('boton')
+                    || keyLower.includes('btn');
+
+                if (isButtonLike && matchedTerms.length > 0) {
+                    matchedTerms.forEach((term) => runtimeContext.matchedTerms.add(term));
+                    this.addFoundComponent(foundComponents, obj, currentPath, `Botón detectado por términos: ${matchedTerms.join(', ')}`, 'BOTON_ESPECIAL');
+                }
+                break;
+            }
+
+            case 'panel-non-accordion': {
+                if (typeLower === 'panel' && !this.normalizeText(obj?.name).includes('accordion')) {
+                    this.addFoundComponent(foundComponents, obj, currentPath, 'Panel (No accordion)', 'PANEL');
+                }
+                break;
+            }
+
+            case 'flags-by-keys': {
+                const flagParams = this.parseFlagFilterParams(params);
+                for (const key in obj) {
+                    const normalizedKey = this.normalizeText(key).replace(/_/g, '');
+                    if (flagParams.keys.includes(normalizedKey)) {
+                        runtimeContext.matchedFlags.add(normalizedKey);
+                        this.addFoundComponent(foundComponents, obj, `${currentPath}.${key}`, `Flag especial: ${key}=${obj[key]}`, 'FLAG', String(obj[key] ?? 'N/A'));
+                    }
+                }
+                break;
+            }
+
+            case 'checkbox-group': {
+                const checkboxParams = this.parseCheckboxGroupParams(params);
+                const isCheckboxLike = this.getNodeTypeTokens(obj).some((token) => token.includes('checkbox'));
+                const optionCount = this.getCheckboxOptionCount(obj);
+                if (isCheckboxLike && optionCount >= checkboxParams.minOptions) {
+                    this.addFoundComponent(foundComponents, obj, currentPath, `Grupo de checkboxs con ${optionCount} opciones`, 'CHECKBOX_GROUP');
+                }
+                break;
+            }
         }
 
         // Seguir explorando recursivamente (por ejemplo, buscar components interno)
         for (const property in obj) {
-            this.walkAndFilter(obj[property], `${currentPath}.${property}`, foundComponents, options);
+            this.walkAndFilter(obj[property], `${currentPath}.${property}`, foundComponents, filter, runtimeContext);
+        }
+    }
+
+    private shouldIncludeForm(filter: FilterRequest, runtimeContext: RuntimeContext, foundComponents: ComponenteEncontrado[]): boolean {
+        if (this.isTermBasedFilterType(filter.type)) {
+            const termParams = this.getSummaryTermFilterParams(filter);
+            if (termParams.mode === 'all') {
+                return termParams.terms.length > 0 && termParams.terms.every((term) => runtimeContext.matchedTerms.has(term));
+            }
+            return foundComponents.length > 0;
+        }
+
+        const params = filter.params || {};
+
+        switch (filter.type) {
+            case 'flags-by-keys': {
+                const flagParams = this.parseFlagFilterParams(params);
+                if (flagParams.mode === 'all') {
+                    return flagParams.keys.length > 0 && flagParams.keys.every((key) => runtimeContext.matchedFlags.has(key));
+                }
+                return foundComponents.length > 0;
+            }
+            default:
+                return foundComponents.length > 0;
+        }
+    }
+
+    private describeAppliedFilter(filter: FilterRequest): { tipo: string; valor: string } {
+        if (this.isTermBasedFilterType(filter.type)) {
+            const termParams = this.getSummaryTermFilterParams(filter);
+            return {
+                tipo: filter.label || filter.type,
+                valor: `${termParams.mode === 'all' ? 'todos' : 'cualquiera'}: ${termParams.terms.join(', ')}`
+            };
+        }
+
+        const params = filter.params || {};
+
+        switch (filter.type) {
+            case 'flags-by-keys': {
+                const flagParams = this.parseFlagFilterParams(params);
+                return {
+                    tipo: filter.label || filter.type,
+                    valor: `${flagParams.mode === 'all' ? 'todas' : 'cualquiera'}: ${flagParams.keys.join(', ')}`
+                };
+            }
+            case 'checkbox-group': {
+                const checkboxParams = this.parseCheckboxGroupParams(params);
+                return {
+                    tipo: filter.label || filter.type,
+                    valor: `mínimo ${checkboxParams.minOptions} opciones`
+                };
+            }
+            default:
+                return {
+                    tipo: filter.label || filter.type,
+                    valor: 'preset sin parámetros adicionales'
+                };
         }
     }
 
@@ -239,63 +727,56 @@ export class ProcesadorFormularios {
             formulariosDetalle: [],
             errores: []
         };
-        
-        if (options.filters.searchPlaintext) {
-             info.filtrosAplicados.push({ tipo: "Búsqueda de Campo", valor: "plainText o HTML" });
-        }
-        if (options.filters.searchTiposDocumento) {
-             info.filtrosAplicados.push({ tipo: "Extracción", valor: "Tipos de Documento (enumNames)" });
-        }
 
-        const BATCH_SIZE = 50; // Fetch hasta 50 URLs a la vez para acelerar y evitar Vercel Timeout (10s)
-        for (let i = 0; i < total; i += BATCH_SIZE) {
-            const currentBatch = uniqueUrls.slice(i, i + BATCH_SIZE);
-            const batchPromises = currentBatch.map((url, idx) => this.goFetchUrl(url, i + idx, total));
-            const batchResults = await Promise.all(batchPromises);
+        info.filtrosAplicados.push(this.describeAppliedFilter(options.filter));
 
-            for (const fetchResult of batchResults) {
-                if (fetchResult.error) {
-                    info.errores.push({ url: fetchResult.url, error: fetchResult.error });
-                    info.conErrores++;
-                    continue;
-                }
+        const fetchResults = await Promise.all(uniqueUrls.map((url, index) => this.goFetchUrl(url, index, total)));
 
-                const data = fetchResult.data;
-                const formTitle = data.title || data.name || "Formulario sin título";
-                const foundComponents: ComponenteEncontrado[] = [];
-                
-                // Si el objeto principal tiene properties / components
-                if (data.components) {
-                    this.walkAndFilter(data.components, 'root', foundComponents, options);
-                } else {
-                    this.walkAndFilter(data, 'root', foundComponents, options);
-                }
+        for (const fetchResult of fetchResults) {
 
-                if (foundComponents.length > 0) {
-                    const extractedTipos: any[] = [];
-                    if (options.filters.searchTiposDocumento) {
-                        foundComponents.forEach(c => {
-                            if (c.enumNames) {
-                                extractedTipos.push({
-                                    key: c.key,
-                                    label: c.label,
-                                    enumNames: c.enumNames
-                                });
-                            }
+            if (fetchResult.error) {
+                info.errores.push({ url: fetchResult.url, error: fetchResult.error });
+                info.conErrores++;
+                continue;
+            }
+
+            const data = fetchResult.data;
+            const formTitle = data.title || data.name || "Formulario sin título";
+            const foundComponents: ComponenteEncontrado[] = [];
+            const extractedTipos: { key: string; label: string; enumNames: string[] }[] = [];
+
+            const runtimeContext: RuntimeContext = {
+                matchedTerms: new Set<string>(),
+                matchedFlags: new Set<string>()
+            };
+
+            if (data.components) {
+                this.walkAndFilter(data.components, 'root', foundComponents, options.filter, runtimeContext);
+            } else {
+                this.walkAndFilter(data, 'root', foundComponents, options.filter, runtimeContext);
+            }
+
+            if (this.shouldIncludeForm(options.filter, runtimeContext, foundComponents)) {
+                foundComponents.forEach((component) => {
+                    if (component.enumNames) {
+                        extractedTipos.push({
+                            key: component.key,
+                            label: component.label,
+                            enumNames: component.enumNames
                         });
                     }
-                    
-                    info.formulariosDetalle.push({
-                        url: fetchResult.url,
-                        title: formTitle,
-                        timestamp: new Date().toISOString(),
-                        componentesEncontrados: foundComponents,
-                        tipoDocumentos: extractedTipos
-                    });
-                }
+                });
 
-                info.procesadosExitosamente++;
+                info.formulariosDetalle.push({
+                    url: fetchResult.url,
+                    title: formTitle,
+                    timestamp: new Date().toISOString(),
+                    componentesEncontrados: foundComponents,
+                    tipoDocumentos: extractedTipos
+                });
             }
+
+            info.procesadosExitosamente++;
         }
 
         return info;
