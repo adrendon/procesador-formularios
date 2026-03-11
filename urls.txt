@@ -31,6 +31,11 @@ https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empres
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/personas-y-pymes/credito-de-consumo/t160443/solicitud-de-credito-de-consumo.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/personas-y-pymes/credito-hipotecario/t160612/F-3112-hd.model.json 
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/envio-f1.model.json
+https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/canales/t1601110/actualizacion-de-informacion-para-entrega-de-qr-bre-b.model.json
+https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/evc-ventas-digitales-y-tecnologia-de-mercadeo/ventas-digitales/plan-salud-para-ti.model.json
+https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/credito-hipotecario/t160087/historico-y-proyeccion-de-pagos-ch.model.json
+https://formulariosdigitales.bancolombia.com/
+https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/tarjeta-de-credito/t160487/solicitudes-centro-de-soluciones-para-tarjetas-corporativas.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-9/form-9-f-1538-declaraci-n---naturaleza-de-los-recursos.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-21-ntt/21-f-1486-formato-de-relacionados-pep.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-23-ntt-2/23-formato-de-conocimiento-de-socios-y-accionistas-v2.model.json
