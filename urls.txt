@@ -24,17 +24,15 @@ https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/gestio
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/personas-y-pymes/credito-hipotecario/t160612/F-3112-hd.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/canales/t1601110/vinculacion-qr-hd.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/envio-f5.model.json
-'https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/envio-f1.model.json
+https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/envio-f1.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/recepcion-f2.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/recepcion-f5.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/formulario-macro.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/personas-y-pymes/credito-de-consumo/t160443/solicitud-de-credito-de-consumo.model.json
-https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/personas-y-pymes/credito-hipotecario/t160612/F-3112-hd.model.json 
-https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/empresas-y-gobierno/mercado-cambiario/t160208/envio-f1.model.json
+https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/personas-y-pymes/credito-hipotecario/t160612/F-3112-hd.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/canales/t1601110/actualizacion-de-informacion-para-entrega-de-qr-bre-b.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/evc-ventas-digitales-y-tecnologia-de-mercadeo/ventas-digitales/plan-salud-para-ti.model.json
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/credito-hipotecario/t160087/historico-y-proyeccion-de-pagos-ch.model.json
-https://formulariosdigitales.bancolombia.com/
 https://formulariosdigitales.bancolombia.com/content/forms/af/bancolombia/cumplimiento-de-los-servicios/tarjeta-de-credito/t160487/solicitudes-centro-de-soluciones-para-tarjetas-corporativas.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-9/form-9-f-1538-declaraci-n---naturaleza-de-los-recursos.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-21-ntt/21-f-1486-formato-de-relacionados-pep.model.json
@@ -65,7 +63,6 @@ https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-92/50-F-640-8000563-V9-Solicitud-servicio-cheques-Bancolombia-Forma-continua.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-20-ntt/formato-de-afiliacion-a-establecimientos-bancolombia-hls.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-13-ntt/formato-de-novedades-aceptacion-de-medios-de-pago-hls.model.json
-https://author-p115055-e1126678.adobeaemcloud.com/ui#/aem/aem/formdetails.model.json/content/dam/formsanddocuments/in-development/form-31-ntt/53-8003368-V5-Solicitud-Credito-Consumo
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-54-ntt/54-f-3096-certificaci-n-para-error-en-diligencimiento-de-formatos-persona-natural.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-38-ntt/55-f-3097-certificacion-para-error-en-diligencimiento-de-formatos-persona-juridica.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-57-ntt/57-f-1528-solicitud-de-afiliacion-a-aceptacion-de-pagos-bancolombia-parte-1.model.json
@@ -156,7 +153,6 @@ https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-170-ntt/form-167-f-2506-formulario-novedades-conexion-empresarial---terceros.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-178-ntt/178-nda-unilateral-ingles--bancolombia-reveladora-.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-174-ntt/174-covenants.model.json
-Repetido
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-185-ntt/form-185-formato-de-solicitud-de-tarjeta-tc--45.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-186-ntt/186-f-3069-formato-entrevista-para-persona-juridica-con-condicion-de-pep.model.json
 https://formulariosdigitalesdev.ambientesbc.com/content/forms/af/in-development/form-187/f-1455-v2-solicitud-de-anulacion-de-formularios-cambiarios-vf.model.json
