@@ -19,8 +19,12 @@ interface ResultadoFormulario {
     url: string;
     title: string;
     timestamp: string;
-    componentesEncontrados: ComponenteEncontrado[];
-    tipoDocumentos: { key: string; label: string; enumNames: string[] }[];
+    componentesEncontrados?: ComponenteEncontrado[];
+    tipoDocumentos?: { key: string; label: string; enumNames: string[] }[];
+    estadisticasFieldType?: {
+        porTipo: Record<string, number>;
+        total: number;
+    };
 }
 
 interface InformeGeneral {
@@ -34,6 +38,10 @@ interface InformeGeneral {
     }[];
     formulariosDetalle: ResultadoFormulario[];
     errores: ErrorProcesamiento[];
+    estadisticasGlobalesFieldType?: {
+        porTipo: Record<string, number>;
+        total: number;
+    };
 }
 
 type MatchMode = 'all' | 'any';
@@ -84,9 +92,17 @@ const DEFAULT_CHECKBOX_MIN_OPTIONS = 3;
 const FETCH_TIMEOUT_MS = 5000;
 const DROPDOWN_COMPONENT_TYPES = ['select', 'dropdown', 'drop-down'];
 const SIGNATURE_COMPONENT_TOKENS = ['signature', 'signaturepad', 'signature-pad', 'esign', 'e-sign', 'firma'];
+const SIGNATURE_NAMING_TOKENS = ['signature', 'signaturepad', 'signature-pad', 'esign', 'e-sign', 'firmaelectronica', 'tipofirmaelectronica'];
 const SIGNATURE_FLAG_KEYS = ['signature', 'signaturetype', 'tipofirmaelectronica', 'firmaelectronica'];
 const SIGNATURE_POSITIVE_VALUES = ['yes', 'true', 'si', '1', 'simple', 'digital', 'electronica', 'electronic'];
 const SIGNATURE_NEGATIVE_VALUES = ['no', 'false', '0', 'no aplica', 'none', 'ninguno', 'n/a', 'na'];
+const SIGNATURE_CONFIG_VALUE_TOKENS = [...SIGNATURE_COMPONENT_TOKENS, ...SIGNATURE_POSITIVE_VALUES];
+const INVALID_FIELD_TYPE_TOKENS = [
+    'string', 'number', 'integer', 'boolean', 'object', 'array',
+    'string[]', 'number[]', 'integer[]', 'object[]',
+    'form', 'text/css', 'text/javascript', 'application/json',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6'
+];
 
 export type FilterType =
     | 'dropdown-with-terms'
@@ -97,7 +113,9 @@ export type FilterType =
     | 'buttons-by-terms'
     | 'panel-non-accordion'
     | 'flags-by-keys'
-    | 'checkbox-group';
+    | 'checkbox-group'
+    | 'fieldtype-search'
+    | 'all-fieldtypes-summary';
 
 export interface FilterRequest {
     presetId?: string;
@@ -128,9 +146,15 @@ interface CheckboxGroupParams {
     minOptions: number;
 }
 
+interface FieldTypeSearchParams {
+    fieldTypes: string[];
+    mode: MatchMode;
+}
+
 interface RuntimeContext {
     matchedTerms: Set<string>;
     matchedFlags: Set<string>;
+    matchedFieldTypes: Map<string, number>;
 }
 
 export class ProcesadorFormularios {
@@ -184,6 +208,53 @@ export class ProcesadorFormularios {
         }, 0);
     }
 
+    private computeFieldTypeStatistics(components: ComponenteEncontrado[]): { porTipo: Record<string, number>; total: number } {
+        const stats: Record<string, number> = {};
+        let total = 0;
+
+        components.forEach((component) => {
+            const fieldType = component.type || 'sin-tipo';
+            stats[fieldType] = (stats[fieldType] || 0) + 1;
+            total++;
+        });
+
+        return {
+            porTipo: stats,
+            total
+        };
+    }
+
+    private countAllFieldTypes(obj: any): { porTipo: Record<string, number>; total: number } {
+        const stats: Record<string, number> = {};
+        let total = 0;
+
+        const walkAll = (current: any) => {
+            if (typeof current !== 'object' || current === null) return;
+
+            if (Array.isArray(current)) {
+                current.forEach((item) => walkAll(item));
+                return;
+            }
+
+            const fieldType = this.getCanonicalFieldType(current);
+            if (fieldType) {
+                stats[fieldType] = (stats[fieldType] || 0) + 1;
+                total++;
+            }
+
+            for (const property in current) {
+                walkAll(current[property]);
+            }
+        };
+
+        walkAll(obj);
+
+        return {
+            porTipo: stats,
+            total
+        };
+    }
+
     private getEnumNames(obj: any): string[] {
         if (Array.isArray(obj?.enumNames)) {
             return obj.enumNames;
@@ -200,6 +271,50 @@ export class ProcesadorFormularios {
         return [obj?.type, obj?.fieldType, obj?.[':type']]
             .map((value) => this.normalizeText(value))
             .filter(Boolean);
+    }
+
+    private normalizeFieldTypeToken(value: unknown): string | null {
+        const token = this.normalizeText(value);
+
+        if (!token || INVALID_FIELD_TYPE_TOKENS.includes(token)) {
+            return null;
+        }
+
+        if (token === 'drop-down') return 'dropdown';
+        if (token === 'text-input' || token === 'textfield') return 'text';
+        if (token === 'rich-text') return 'richtext';
+
+        return token;
+    }
+
+    private getCanonicalFieldType(obj: any): string | null {
+        const fieldType = this.normalizeFieldTypeToken(obj?.fieldType);
+        if (fieldType) {
+            return fieldType;
+        }
+
+        const typeToken = this.normalizeFieldTypeToken(obj?.type);
+        if (typeToken) {
+            const isKnownInteractive = INTERACTIVE_TYPE_TOKENS.some((token) => typeToken.includes(token));
+            const isKnownInformative = ['plain-text', 'plaintext', 'richtext', 'html', 'file'].includes(typeToken);
+
+            if (isKnownInteractive || isKnownInformative) {
+                return typeToken;
+            }
+        }
+
+        const schemaTokens = this.getSchemaTypeTokens(obj);
+        const plainTextToken = schemaTokens.find((token) =>
+            PLAIN_TEXT_SCHEMA_TOKENS.some((schemaToken) => token === schemaToken || token.includes(schemaToken))
+        );
+
+        if (plainTextToken) {
+            if (plainTextToken.includes('rich')) return 'richtext';
+            if (plainTextToken.includes('html')) return 'html';
+            return 'plain-text';
+        }
+
+        return null;
     }
 
     private getSchemaTypeTokens(obj: any): string[] {
@@ -301,16 +416,44 @@ export class ProcesadorFormularios {
     }
 
     private hasConfiguredSignatureValue(value: unknown): boolean {
+        if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+            return false;
+        }
+
         const normalizedValue = this.normalizeText(value);
         if (!normalizedValue) {
             return false;
         }
 
-        return !SIGNATURE_NEGATIVE_VALUES.includes(normalizedValue);
+        if (SIGNATURE_NEGATIVE_VALUES.includes(normalizedValue)) {
+            return false;
+        }
+
+        return SIGNATURE_CONFIG_VALUE_TOKENS.some((token) => normalizedValue === token || normalizedValue.includes(token));
+    }
+
+    private resolveFoundComponentType(obj: any, fallbackType: string): string {
+        const canonicalFieldType = this.getCanonicalFieldType(obj);
+        if (canonicalFieldType) {
+            return canonicalFieldType;
+        }
+
+        const normalizedFieldType = this.normalizeFieldTypeToken(obj?.fieldType);
+        if (normalizedFieldType) {
+            return normalizedFieldType;
+        }
+
+        const normalizedType = this.normalizeFieldTypeToken(obj?.type);
+        if (normalizedType) {
+            return normalizedType;
+        }
+
+        return fallbackType;
     }
 
     private getSignatureDescriptor(obj: any, labelText: string): { description: string; labelOverride?: string; pathSuffix?: string } | null {
         const schemaTypeTokens = this.getSchemaTypeTokens(obj);
+        const canonicalFieldType = this.getCanonicalFieldType(obj);
         const namingHaystack = [obj?.key, obj?.name, labelText, obj?.title]
             .map((value) => this.normalizeText(value))
             .filter(Boolean)
@@ -324,8 +467,11 @@ export class ProcesadorFormularios {
             };
         }
 
-        const signatureNamingToken = SIGNATURE_COMPONENT_TOKENS.find((token) => namingHaystack.includes(token));
-        if (signatureNamingToken && schemaTypeTokens.some((token) => token.includes('field') || token.includes('component') || token.includes('widget') || token.includes('input'))) {
+        const signatureNamingToken = SIGNATURE_NAMING_TOKENS.find((token) => namingHaystack.includes(token));
+        const isInputLikeNode = this.isInteractiveInputNode(obj)
+            || (canonicalFieldType !== null && canonicalFieldType !== 'panel' && canonicalFieldType !== 'plain-text' && canonicalFieldType !== 'html' && canonicalFieldType !== 'richtext');
+
+        if (signatureNamingToken && isInputLikeNode) {
             return {
                 description: `Firma detectada por naming técnico: ${signatureNamingToken}`,
                 labelOverride: labelText || obj?.title || obj?.name || undefined
@@ -407,6 +553,17 @@ export class ProcesadorFormularios {
         };
     }
 
+    private parseFieldTypeSearchParams(params: Record<string, unknown> | undefined): FieldTypeSearchParams {
+        return {
+            fieldTypes: Array.isArray(params?.terms)
+                ? params!.terms.map((ft) => this.normalizeText(ft)).filter(Boolean)
+                : Array.isArray(params?.fieldTypes)
+                    ? params!.fieldTypes.map((ft) => this.normalizeText(ft)).filter(Boolean)
+                    : [],
+            mode: this.parseMatchMode(params?.mode, 'any')
+        };
+    }
+
     private isTermBasedFilterType(filterType: FilterType): filterType is TermBasedFilterType {
         return filterType === 'dropdown-with-terms'
             || filterType === 'fields-by-terms'
@@ -473,11 +630,57 @@ export class ProcesadorFormularios {
         foundComponents.push({
             key: obj?.key || obj?.name || 'N/A',
             label: labelOverride || this.getLabelText(obj) || obj?.value || 'N/A',
-            type: obj?.type || obj?.fieldType || fallbackType,
+            type: this.resolveFoundComponentType(obj, fallbackType),
             description,
             sourcePath: currentPath,
             enumNames
         });
+    }
+
+    private buildFormResultByFilter(
+        filterType: FilterType,
+        baseData: { url: string; title: string; timestamp: string },
+        foundComponents: ComponenteEncontrado[],
+        extractedTipos: { key: string; label: string; enumNames: string[] }[],
+        fieldTypeStats?: { porTipo: Record<string, number>; total: number }
+    ): ResultadoFormulario {
+        const result: ResultadoFormulario = {
+            url: baseData.url,
+            title: baseData.title,
+            timestamp: baseData.timestamp
+        };
+
+        switch (filterType) {
+            case 'all-fieldtypes-summary':
+                if (fieldTypeStats && fieldTypeStats.total > 0) {
+                    result.estadisticasFieldType = fieldTypeStats;
+                }
+                return result;
+
+            case 'dropdown-with-terms':
+                if (foundComponents.length > 0) {
+                    result.componentesEncontrados = foundComponents;
+                }
+                if (extractedTipos.length > 0) {
+                    result.tipoDocumentos = extractedTipos;
+                }
+                return result;
+
+            case 'fieldtype-search':
+                if (foundComponents.length > 0) {
+                    result.componentesEncontrados = foundComponents;
+                }
+                if (fieldTypeStats && fieldTypeStats.total > 0) {
+                    result.estadisticasFieldType = fieldTypeStats;
+                }
+                return result;
+
+            default:
+                if (foundComponents.length > 0) {
+                    result.componentesEncontrados = foundComponents;
+                }
+                return result;
+        }
     }
 
     private async goFetchUrl(url: string, index: number, total: number): Promise<any> {
@@ -644,6 +847,38 @@ export class ProcesadorFormularios {
                 }
                 break;
             }
+
+            case 'fieldtype-search': {
+                const fieldTypeParams = this.parseFieldTypeSearchParams(params);
+                const canonicalFieldType = this.getCanonicalFieldType(obj);
+
+                if (canonicalFieldType) {
+                    const matches = fieldTypeParams.fieldTypes.some((ft) => {
+                        const normalizedFt = this.normalizeText(ft);
+                        return canonicalFieldType === normalizedFt
+                            || canonicalFieldType.includes(normalizedFt)
+                            || normalizedFt.includes(canonicalFieldType);
+                    });
+
+                    if (matches) {
+                        const count = (runtimeContext.matchedFieldTypes.get(canonicalFieldType) || 0) + 1;
+                        runtimeContext.matchedFieldTypes.set(canonicalFieldType, count);
+                        this.addFoundComponent(
+                            foundComponents,
+                            { ...obj, fieldType: canonicalFieldType, type: canonicalFieldType },
+                            currentPath,
+                            `Componente de tipo: ${canonicalFieldType}`,
+                            canonicalFieldType
+                        );
+                    }
+                }
+                break;
+            }
+
+            case 'all-fieldtypes-summary': {
+                // Este motor no filtra por coincidencia puntual; permite incluir todos los formularios.
+                break;
+            }
         }
 
         // Seguir explorando recursivamente (por ejemplo, buscar components interno)
@@ -671,6 +906,15 @@ export class ProcesadorFormularios {
                 }
                 return foundComponents.length > 0;
             }
+            case 'fieldtype-search': {
+                const fieldTypeParams = this.parseFieldTypeSearchParams(params);
+                if (fieldTypeParams.mode === 'all') {
+                    return fieldTypeParams.fieldTypes.length > 0 && fieldTypeParams.fieldTypes.every((ft) => runtimeContext.matchedFieldTypes.has(ft));
+                }
+                return runtimeContext.matchedFieldTypes.size > 0;
+            }
+            case 'all-fieldtypes-summary':
+                return true;
             default:
                 return foundComponents.length > 0;
         }
@@ -700,6 +944,19 @@ export class ProcesadorFormularios {
                 return {
                     tipo: filter.label || filter.type,
                     valor: `mínimo ${checkboxParams.minOptions} opciones`
+                };
+            }
+            case 'fieldtype-search': {
+                const fieldTypeParams = this.parseFieldTypeSearchParams(params);
+                return {
+                    tipo: filter.label || filter.type,
+                    valor: `${fieldTypeParams.mode === 'all' ? 'todos' : 'cualquiera'}: ${fieldTypeParams.fieldTypes.join(', ')}`
+                };
+            }
+            case 'all-fieldtypes-summary': {
+                return {
+                    tipo: filter.label || filter.type,
+                    valor: 'sin filtro por términos; resume todos los fieldType del universo procesado'
                 };
             }
             default:
@@ -732,6 +989,9 @@ export class ProcesadorFormularios {
 
         const fetchResults = await Promise.all(uniqueUrls.map((url, index) => this.goFetchUrl(url, index, total)));
 
+        const shouldIncludeFieldTypeSummary = options.filter.type === 'all-fieldtypes-summary';
+        const globalFieldTypeStats: Record<string, number> = {};
+
         for (const fetchResult of fetchResults) {
 
             if (fetchResult.error) {
@@ -741,13 +1001,22 @@ export class ProcesadorFormularios {
             }
 
             const data = fetchResult.data;
+
+            if (shouldIncludeFieldTypeSummary) {
+                const allFieldTypesInForm = this.countAllFieldTypes(data);
+                Object.entries(allFieldTypesInForm.porTipo).forEach(([tipo, count]) => {
+                    globalFieldTypeStats[tipo] = (globalFieldTypeStats[tipo] || 0) + count;
+                });
+            }
+
             const formTitle = data.title || data.name || "Formulario sin título";
             const foundComponents: ComponenteEncontrado[] = [];
             const extractedTipos: { key: string; label: string; enumNames: string[] }[] = [];
 
             const runtimeContext: RuntimeContext = {
                 matchedTerms: new Set<string>(),
-                matchedFlags: new Set<string>()
+                matchedFlags: new Set<string>(),
+                matchedFieldTypes: new Map<string, number>()
             };
 
             if (data.components) {
@@ -767,16 +1036,34 @@ export class ProcesadorFormularios {
                     }
                 });
 
-                info.formulariosDetalle.push({
-                    url: fetchResult.url,
-                    title: formTitle,
-                    timestamp: new Date().toISOString(),
-                    componentesEncontrados: foundComponents,
-                    tipoDocumentos: extractedTipos
-                });
+                const estadisticas = this.computeFieldTypeStatistics(foundComponents);
+                const allFieldTypesStats = shouldIncludeFieldTypeSummary ? this.countAllFieldTypes(data) : undefined;
+                const statsForCurrentFilter = shouldIncludeFieldTypeSummary ? allFieldTypesStats : estadisticas;
+
+                const resultadoFormulario = this.buildFormResultByFilter(
+                    options.filter.type,
+                    {
+                        url: fetchResult.url,
+                        title: formTitle,
+                        timestamp: new Date().toISOString()
+                    },
+                    foundComponents,
+                    extractedTipos,
+                    statsForCurrentFilter
+                );
+
+                info.formulariosDetalle.push(resultadoFormulario);
             }
 
             info.procesadosExitosamente++;
+        }
+
+        // Agregar estadísticas globales al informe
+        if (shouldIncludeFieldTypeSummary && Object.keys(globalFieldTypeStats).length > 0) {
+            info.estadisticasGlobalesFieldType = {
+                porTipo: globalFieldTypeStats,
+                total: Object.values(globalFieldTypeStats).reduce((sum, count) => sum + count, 0)
+            };
         }
 
         return info;

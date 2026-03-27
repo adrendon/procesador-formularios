@@ -9,7 +9,9 @@ type FilterType =
     | 'buttons-by-terms'
     | 'panel-non-accordion'
     | 'flags-by-keys'
-    | 'checkbox-group';
+    | 'checkbox-group'
+    | 'fieldtype-search'
+    | 'all-fieldtypes-summary';
 
 type FilterUiKind = 'none' | 'term-list' | 'checkbox-group';
 
@@ -125,6 +127,27 @@ const FILTER_PRESETS: FilterPreset[] = [
         type: 'checkbox-group',
         ui: 'checkbox-group',
         minOptionsDefault: 3
+    },
+    {
+        id: 'fieldtype-search',
+        label: 'Buscar por fieldType específico',
+        help: 'Busca formularios que contengan campos de un tipo específico. Ejemplos: text, email, checkbox, select, date, number.',
+        type: 'fieldtype-search',
+        ui: 'term-list',
+        defaultTerms: ['text', 'email', 'checkbox', 'select', 'radio', 'date', 'number', 'password', 'textarea', 'dropdown', 'button', 'submit', 'input', 'textfield', 'signature', 'plaintext', 'richtext', 'html', 'panel'],
+        defaultMode: 'any',
+        termsLabel: 'Tipos de field a buscar',
+        termsPlaceholder: 'text\nemail\ncheckbox\nselect\nradio\ndate\nnumber\npassword\ntextarea\ndropdown\nbutton\nsubmit\ninput\nsignature\npanel',
+        params: {
+            extractCounts: true
+        }
+    },
+    {
+        id: 'all-fieldtypes-summary',
+        label: 'Resumen total de fieldTypes (sin filtro)',
+        help: 'No filtra formularios: genera el inventario completo de fieldTypes y cantidades sobre todas las URLs procesadas.',
+        type: 'all-fieldtypes-summary',
+        ui: 'none'
     }
 ];
 
@@ -251,13 +274,35 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
           <button id="btnDownloadCsv" class="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded hover:bg-emerald-700 transition shadow-sm">
             📊 Descargar CSV Mapeado
           </button>
+                    <button id="btnDownloadCsvDetailed" class="px-4 py-2 bg-teal-700 text-white text-sm font-medium rounded hover:bg-teal-600 transition shadow-sm">
+                        🧾 Descargar CSV Detallado
+                    </button>
+        </div>
+
+        <!-- Estadísticas globales de fieldType -->
+        <div id="fieldTypeStatsContainer" class="hidden bg-gray-900 rounded-lg p-4 mb-6 shadow-inner">
+          <div class="mb-4 flex justify-between items-center text-gray-400 text-xs border-b border-gray-700 pb-2">
+            <span class="font-semibold uppercase tracking-wider">ESTADÍSTICAS POR TIPO</span>
+          </div>
+          <div id="fieldTypeStatsList" class="space-y-3">
+            <!-- Estadísticas inyectadas dinámicamente -->
+          </div>
         </div>
 
         <!-- Previsualizador de Formularios / URLs -->
         <div class="bg-gray-900 rounded-lg p-4 mb-6 shadow-inner">
           <div class="mb-2 flex justify-between items-center text-gray-400 text-xs border-b border-gray-700 pb-2">
             <span class="font-semibold uppercase tracking-wider">VISUALIZADOR DE URLs PROCESADAS</span>
-            <span id="formsCount" class="font-bold text-gray-300">0</span>
+                        <div class="flex items-center gap-3">
+                            <div id="summarySortContainer" class="hidden items-center gap-2">
+                                <label for="summarySortSelect" class="text-[11px] text-gray-400">Orden</label>
+                                <select id="summarySortSelect" class="px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-200 text-[11px] focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="desc">Mayor a menor</option>
+                                    <option value="asc">Menor a mayor</option>
+                                </select>
+                            </div>
+                            <span id="formsCount" class="font-bold text-gray-300">0</span>
+                        </div>
           </div>
           <div class="max-h-80 overflow-y-auto w-full">
             <table class="w-full text-left text-gray-300 text-xs">
@@ -339,6 +384,10 @@ const resultsContainer = document.getElementById('resultsContainer') as HTMLDivE
 const jsonPreview = document.getElementById('jsonPreview') as HTMLPreElement;const formsCount = document.getElementById('formsCount') as HTMLSpanElement;
 const formsTableHead = document.getElementById('formsTableHead') as HTMLTableSectionElement;
 const formsTableBody = document.getElementById('formsTableBody') as HTMLTableSectionElement;
+const summarySortContainer = document.getElementById('summarySortContainer') as HTMLDivElement;
+const summarySortSelect = document.getElementById('summarySortSelect') as HTMLSelectElement;
+const fieldTypeStatsContainer = document.getElementById('fieldTypeStatsContainer') as HTMLDivElement;
+const fieldTypeStatsList = document.getElementById('fieldTypeStatsList') as HTMLDivElement;
 const statTotal = document.getElementById('statTotal') as HTMLSpanElement;
 const statOk = document.getElementById('statOk') as HTMLSpanElement;
 const statFiltered = document.getElementById('statFiltered') as HTMLSpanElement;
@@ -346,6 +395,7 @@ const statError = document.getElementById('statError') as HTMLSpanElement;
 const btnDownloadJson = document.getElementById('btnDownloadJson') as HTMLButtonElement;
 const btnDownloadTxt = document.getElementById('btnDownloadTxt') as HTMLButtonElement;
 const btnDownloadCsv = document.getElementById('btnDownloadCsv') as HTMLButtonElement;
+const btnDownloadCsvDetailed = document.getElementById('btnDownloadCsvDetailed') as HTMLButtonElement;
 const errorsContainer = document.getElementById('errorsContainer') as HTMLDivElement;
 const errorCountHeader = document.getElementById('errorCountHeader') as HTMLSpanElement;
 const errorsTableBody = document.getElementById('errorsTableBody') as HTMLTableSectionElement;
@@ -358,6 +408,449 @@ const duplicateCountHeader = document.getElementById('duplicateCountHeader') as 
 const duplicatesTableBody = document.getElementById('duplicatesTableBody') as HTMLTableSectionElement;
 
 let currentResult: any = null;
+let summarySortOrder: 'asc' | 'desc' = 'desc';
+
+function sanitizeUnicodeSeparators(value: unknown): unknown {
+    if (typeof value === 'string') {
+        return value.replace(/[\u2028\u2029]/g, ' ');
+    }
+
+    if (Array.isArray(value)) {
+        return value.map((item) => sanitizeUnicodeSeparators(item));
+    }
+
+    if (value && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        Object.entries(value as Record<string, unknown>).forEach(([key, val]) => {
+            result[key] = sanitizeUnicodeSeparators(val);
+        });
+        return result;
+    }
+
+    return value;
+}
+
+function getDetectedFieldTypes(): string[] {
+    const stats = currentResult?.estadisticasGlobalesFieldType?.porTipo;
+    if (!stats || typeof stats !== 'object') {
+        return [];
+    }
+
+    return (Object.entries(stats) as [string, number][])
+        .sort((a, b) => b[1] - a[1])
+        .map(([tipo]) => tipo);
+}
+
+function buildRenderResult(data: any): any {
+    return sanitizeUnicodeSeparators(data);
+}
+
+function buildExportResult(data: any): any {
+    const safeData = sanitizeUnicodeSeparators(data) as any;
+
+    const pruneValue = (value: any, key?: string): any => {
+        if (Array.isArray(value)) {
+            const nextArray = value.map((item) => pruneValue(item)).filter((item) => item !== undefined);
+            return nextArray.length > 0 ? nextArray : undefined;
+        }
+
+        if (value && typeof value === 'object') {
+            if (key === 'estadisticasAllFieldTypes' || key === 'componentesData' || key === 'filterMeta') {
+                return undefined;
+            }
+
+            if ((key === 'estadisticasFieldType' || key === 'estadisticasGlobalesFieldType') && (!value.total || value.total <= 0)) {
+                return undefined;
+            }
+
+            const nextObject: Record<string, unknown> = {};
+            Object.entries(value).forEach(([childKey, childValue]) => {
+                const prunedChild = pruneValue(childValue, childKey);
+                if (prunedChild !== undefined) {
+                    nextObject[childKey] = prunedChild;
+                }
+            });
+
+            return Object.keys(nextObject).length > 0 ? nextObject : undefined;
+        }
+
+        return value;
+    };
+
+    return pruneValue(safeData) || {};
+}
+
+function escapeCsvCell(value: unknown): string {
+    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function escapeHtml(value: unknown): string {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getTypeBadgeClass(type: string): string {
+    const normalizedType = type.toLowerCase();
+
+    if (normalizedType.includes('button')) return 'bg-amber-500/20 text-amber-200 border border-amber-400/30';
+    if (normalizedType.includes('checkbox') || normalizedType.includes('radio')) return 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30';
+    if (normalizedType.includes('date') || normalizedType.includes('number')) return 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30';
+    if (normalizedType.includes('tooltip') || normalizedType.includes('plain') || normalizedType.includes('html')) return 'bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-400/30';
+    if (normalizedType.includes('signature') || normalizedType.includes('flag')) return 'bg-rose-500/20 text-rose-200 border border-rose-400/30';
+    return 'bg-blue-500/20 text-blue-200 border border-blue-400/30';
+}
+
+function getTypeBadgeHtml(type: unknown): string {
+    const safeType = escapeHtml(type || 'sin-tipo');
+    return `<span class="inline-flex items-center px-2 py-1 rounded text-[10px] font-semibold ${getTypeBadgeClass(String(type || 'sin-tipo'))}">${safeType}</span>`;
+}
+
+function getExpandableMatchHtml(components?: Array<{ type?: string; description?: string; label?: string; sourcePath?: string }>): string {
+    if (!Array.isArray(components) || components.length === 0) {
+        return '<span class="text-gray-500">Sin detalle</span>';
+    }
+
+    const firstComponent = components[0];
+    const summaryText = escapeHtml(formatFirstMatchSummary(components));
+    const descriptionText = escapeHtml(firstComponent.description || 'Sin descripción');
+    const labelText = escapeHtml(firstComponent.label || 'Sin label');
+    const pathText = escapeHtml(firstComponent.sourcePath || 'Sin ruta');
+
+    return `
+        <details class="group">
+            <summary class="cursor-pointer list-none text-sky-300 hover:text-sky-200 text-xs">${summaryText}</summary>
+            <div class="mt-2 space-y-1 text-[11px] text-gray-300 bg-gray-800/70 rounded p-2 border border-gray-700">
+                <div><span class="text-gray-400">Tipo:</span> ${getTypeBadgeHtml(firstComponent.type)}</div>
+                <div><span class="text-gray-400">Label:</span> ${labelText}</div>
+                <div><span class="text-gray-400">Descripción:</span> ${descriptionText}</div>
+                <div><span class="text-gray-400">Ruta:</span> <span class="font-mono">${pathText}</span></div>
+            </div>
+        </details>
+    `;
+}
+
+function formatTypeStatsSummary(stats?: { porTipo?: Record<string, number>; total?: number }): string {
+    if (!stats?.porTipo) {
+        return 'Sin datos';
+    }
+
+    const entries = Object.entries(stats.porTipo) as [string, number][];
+    if (entries.length === 0) {
+        return 'Sin datos';
+    }
+
+    return entries
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([tipo, count]) => `${tipo}: ${count}`)
+        .join(' | ');
+}
+
+function formatFirstMatchSummary(components?: Array<{ type?: string; description?: string; label?: string }>): string {
+    if (!Array.isArray(components) || components.length === 0) {
+        return 'Sin detalle';
+    }
+
+    const firstComponent = components[0];
+    const typeLabel = firstComponent.type || 'sin-tipo';
+    const detailLabel = firstComponent.label || firstComponent.description || '';
+    const rawSummary = detailLabel ? `${typeLabel} | ${detailLabel}` : typeLabel;
+
+    return rawSummary.length > 100 ? `${rawSummary.slice(0, 97)}...` : rawSummary;
+}
+
+function formatComponentTypesSummary(components?: Array<{ type?: string }>): string {
+    if (!Array.isArray(components) || components.length === 0) {
+        return 'Sin detalle';
+    }
+
+    const uniqueTypes = [...new Set(components.map((component) => component.type || 'sin-tipo'))];
+    return uniqueTypes.slice(0, 4).join(' | ');
+}
+
+function formatFirstComponentPath(components?: Array<{ sourcePath?: string }>): string {
+    if (!Array.isArray(components) || components.length === 0) {
+        return 'Sin ruta';
+    }
+
+    const path = components[0]?.sourcePath || 'Sin ruta';
+    return path.length > 80 ? `${path.slice(0, 77)}...` : path;
+}
+
+function updateSummarySortVisibility(filterType?: string): void {
+    const shouldShow = filterType === 'all-fieldtypes-summary';
+    summarySortContainer.classList.toggle('hidden', !shouldShow);
+    summarySortContainer.classList.toggle('flex', shouldShow);
+}
+
+function renderResultsView(): void {
+    if (!currentResult) {
+        return;
+    }
+
+    const renderResult = buildRenderResult(currentResult) as any;
+    const safeResult = buildExportResult(currentResult) as any;
+
+    statTotal.textContent = currentResult.totalUrls.toString();
+    statOk.textContent = currentResult.procesadosExitosamente.toString();
+    statFiltered.textContent = (currentResult.formulariosDetalle?.length || 0).toString();
+    statError.textContent = currentResult.conErrores.toString();
+
+    resultsContainer.classList.remove('hidden');
+    jsonPreview.textContent = JSON.stringify(safeResult, null, 2);
+
+    updateSummarySortVisibility(renderResult.filterMeta?.type);
+    renderFormsTable(renderResult);
+
+    if (renderResult.filterMeta?.type === 'all-fieldtypes-summary' && renderResult.estadisticasGlobalesFieldType && renderResult.estadisticasGlobalesFieldType.porTipo) {
+        const globalStats = renderResult.estadisticasGlobalesFieldType;
+        fieldTypeStatsContainer.classList.remove('hidden');
+        const statsEntries = (Object.entries(globalStats.porTipo) as [string, number][])
+            .sort((a, b) => b[1] - a[1])
+            .map(([tipo, count]) => `
+                <div class="flex items-center justify-between p-3 bg-gray-800 rounded border border-gray-700">
+                    <span class="font-semibold text-gray-300">${tipo}</span>
+                    <span class="px-3 py-1 bg-blue-600 text-white rounded font-bold text-sm">${count}</span>
+                </div>
+            `).join('');
+        fieldTypeStatsList.innerHTML = `
+            <div class="mb-4 p-3 bg-gray-700 rounded border border-gray-600">
+                <span class="text-gray-300 font-semibold">Total de componentes: </span>
+                <span class="text-white font-bold text-lg">${globalStats.total}</span>
+            </div>
+            ${statsEntries}
+        `;
+    } else {
+        fieldTypeStatsContainer.classList.add('hidden');
+    }
+}
+
+function renderFormsTable(result: any) {
+    const forms = Array.isArray(result.formulariosDetalle) ? result.formulariosDetalle : [];
+    const filterType = result.filterMeta?.type;
+
+    if (forms.length === 0) {
+        formsCount.textContent = '0';
+        formsTableHead.innerHTML = '<tr><th colspan="2" class="px-3 py-2 border-b border-gray-700">Resultados</th></tr>';
+        formsTableBody.innerHTML = '<tr><td colspan="2" class="px-3 py-4 text-center text-gray-500 text-sm">No se pudieron procesar formularios válidos.</td></tr>';
+        return;
+    }
+
+    if (filterType === 'all-fieldtypes-summary') {
+        const sortedForms = [...forms].sort((a: any, b: any) => {
+            const totalA = Number(a?.estadisticasFieldType?.total) || 0;
+            const totalB = Number(b?.estadisticasFieldType?.total) || 0;
+            return summarySortOrder === 'asc' ? totalA - totalB : totalB - totalA;
+        });
+
+        formsCount.textContent = `${sortedForms.length} formularios resumidos`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Total Campos ${summarySortOrder === 'asc' ? '↑' : '↓'}</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Top FieldTypes</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = sortedForms.map((form: any) => `
+            <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                <td class="px-3 py-2 text-xs">${form.estadisticasFieldType?.total || 0}</td>
+                <td class="px-3 py-2 text-xs text-gray-300">${escapeHtml(formatTypeStatsSummary(form.estadisticasFieldType))}</td>
+            </tr>
+        `).join('');
+        return;
+    }
+
+    if (filterType === 'dropdown-with-terms') {
+        formsCount.textContent = `${forms.length} formularios filtrados`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[220px]">Dropdowns Detectados</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Opciones</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = forms.map((form: any) => {
+            const items = Array.isArray(form.tipoDocumentos) ? form.tipoDocumentos : [];
+            const labels = items.map((item: any) => item.label || item.key).filter(Boolean).join(' | ') || 'Sin detalle';
+            const optionCount = items.reduce((sum: number, item: any) => sum + (Array.isArray(item.enumNames) ? item.enumNames.length : 0), 0);
+            return `
+                <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                    <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                    <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${escapeHtml(labels)}</td>
+                    <td class="px-3 py-2 text-xs">${optionCount}</td>
+                </tr>
+            `;
+        }).join('');
+        return;
+    }
+
+    if (filterType === 'fieldtype-search') {
+        formsCount.textContent = `${forms.length} formularios filtrados`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Coincidencias</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Tipos Encontrados</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = forms.map((form: any) => `
+            <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                <td class="px-3 py-2 text-xs">${form.estadisticasFieldType?.total || 0}</td>
+                <td class="px-3 py-2 text-xs text-gray-300">${escapeHtml(formatTypeStatsSummary(form.estadisticasFieldType))}</td>
+            </tr>
+        `).join('');
+        return;
+    }
+
+    if (filterType === 'plain-text' || filterType === 'tooltip') {
+        formsCount.textContent = `${forms.length} formularios filtrados`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Coincidencias</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Tipo Principal</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Detalle</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = forms.map((form: any) => {
+            const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+            return `
+                <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                    <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                    <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                    <td class="px-3 py-2 text-xs">${components.length}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${getTypeBadgeHtml(components[0]?.type || 'N/A')}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${getExpandableMatchHtml(components)}</td>
+                </tr>
+            `;
+        }).join('');
+        return;
+    }
+
+    if (filterType === 'buttons-by-terms' || filterType === 'fields-by-terms') {
+        formsCount.textContent = `${forms.length} formularios filtrados`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Coincidencias</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">Tipos Detectados</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Primer Match</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = forms.map((form: any) => {
+            const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+            return `
+                <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                    <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                    <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                    <td class="px-3 py-2 text-xs">${components.length}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${escapeHtml(formatComponentTypesSummary(components))}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${getExpandableMatchHtml(components)}</td>
+                </tr>
+            `;
+        }).join('');
+        return;
+    }
+
+    if (filterType === 'panel-non-accordion' || filterType === 'checkbox-group') {
+        formsCount.textContent = `${forms.length} formularios filtrados`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Coincidencias</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[160px]">Tipo Principal</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Ruta</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = forms.map((form: any) => {
+            const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+            return `
+                <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                    <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                    <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                    <td class="px-3 py-2 text-xs">${components.length}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${getTypeBadgeHtml(components[0]?.type || 'N/A')}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300 font-mono">${escapeHtml(formatFirstComponentPath(components))}</td>
+                </tr>
+            `;
+        }).join('');
+        return;
+    }
+
+    if (filterType === 'flags-by-keys' || filterType === 'signature') {
+        formsCount.textContent = `${forms.length} formularios filtrados`;
+        formsTableHead.innerHTML = `
+            <tr>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[180px]">URL</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Coincidencias</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[160px]">Tipo Principal</th>
+                <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Detalle Técnico</th>
+            </tr>
+        `;
+
+        formsTableBody.innerHTML = forms.map((form: any) => {
+            const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+            return `
+                <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+                    <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+                    <td class="px-3 py-2 font-mono text-[9px] min-w-[180px]"><div class="truncate max-w-[420px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+                    <td class="px-3 py-2 text-xs">${components.length}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${getTypeBadgeHtml(components[0]?.type || 'N/A')}</td>
+                    <td class="px-3 py-2 text-xs text-gray-300">${getExpandableMatchHtml(components)}</td>
+                </tr>
+            `;
+        }).join('');
+        return;
+    }
+
+    formsCount.textContent = `${forms.length} formularios filtrados`;
+    formsTableHead.innerHTML = `
+        <tr>
+            <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título de Formulario</th>
+            <th class="px-3 py-2 whitespace-nowrap min-w-[200px]">URL Completa</th>
+            <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Coincidencias</th>
+            <th class="px-3 py-2 whitespace-nowrap min-w-[120px]">Tipo Principal</th>
+            <th class="px-3 py-2 whitespace-nowrap min-w-[280px]">Primer Match</th>
+        </tr>
+    `;
+
+    formsTableBody.innerHTML = forms.map((form: any) => {
+        const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+        const firstType = components[0]?.type || 'N/A';
+        const firstMatchSummary = formatFirstMatchSummary(components);
+
+        return `
+        <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700 align-top">
+            <td class="px-3 py-2 font-medium text-xs">${form.title || 'N/A'}</td>
+            <td class="px-3 py-2 font-mono text-[9px] min-w-[200px]"><div class="truncate max-w-[500px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
+            <td class="px-3 py-2 text-xs">${components.length}</td>
+            <td class="px-3 py-2 text-xs text-gray-300">${getTypeBadgeHtml(firstType)}</td>
+            <td class="px-3 py-2 text-xs text-gray-300">${getExpandableMatchHtml(components)}</td>
+        </tr>
+    `}).join('');
+}
 
 function buildFilterRequest(selectedPreset: FilterPreset | undefined): FilterRequest | null {
     if (!selectedPreset) {
@@ -414,8 +907,20 @@ function syncFilterArgumentUI() {
     if (selectedPreset?.ui === 'term-list') {
         termListLabel.textContent = selectedPreset.termsLabel || 'Términos o campos a buscar';
         termListInput.placeholder = selectedPreset.termsPlaceholder || '';
-        termListInput.value = (selectedPreset.defaultTerms || []).join('\n');
+
+        const detectedFieldTypes = selectedPreset.id === 'fieldtype-search'
+            ? getDetectedFieldTypes()
+            : [];
+
+        termListInput.value = (detectedFieldTypes.length > 0
+            ? detectedFieldTypes
+            : (selectedPreset.defaultTerms || [])).join('\n');
+
         termListMode.value = selectedPreset.defaultMode || 'any';
+
+        if (selectedPreset.id === 'fieldtype-search' && detectedFieldTypes.length > 0) {
+            filterHelpText.textContent = `Catálogo detectado automáticamente (${detectedFieldTypes.length} tipos). Edita la lista si quieres filtrar por uno o varios específicos.`;
+        }
     }
 
     if (selectedPreset?.ui === 'checkbox-group') {
@@ -424,6 +929,10 @@ function syncFilterArgumentUI() {
 }
 
 filterSelect.addEventListener('change', syncFilterArgumentUI);
+summarySortSelect.addEventListener('change', () => {
+    summarySortOrder = summarySortSelect.value === 'asc' ? 'asc' : 'desc';
+    renderResultsView();
+});
 syncFilterArgumentUI();
 
 // Toast functionality
@@ -618,7 +1127,18 @@ btnProcess.addEventListener('click', async () => {
         conErrores: 0,
         filtrosAplicados: [],
         formulariosDetalle: [],
-        errores: []
+        errores: [],
+        filterMeta: {
+            presetId: filter.presetId,
+            type: filter.type,
+            label: filter.label
+        },
+        estadisticasGlobalesFieldType: filter.type === 'all-fieldtypes-summary'
+            ? {
+                porTipo: {},
+                total: 0
+            }
+            : undefined
     };
 
     const batchSize = 30;
@@ -663,6 +1183,15 @@ btnProcess.addEventListener('click', async () => {
                 currentResult.errores.push(...(data.errores || []));
                 currentResult.filtrosAplicados = data.filtrosAplicados || currentResult.filtrosAplicados;
 
+                if (filter.type === 'all-fieldtypes-summary' && currentResult.estadisticasGlobalesFieldType) {
+                    const batchGlobalStats = data.estadisticasGlobalesFieldType?.porTipo || {};
+                    Object.entries(batchGlobalStats).forEach(([tipo, count]) => {
+                        const numericCount = Number(count) || 0;
+                        currentResult.estadisticasGlobalesFieldType.porTipo[tipo] =
+                            (currentResult.estadisticasGlobalesFieldType.porTipo[tipo] || 0) + numericCount;
+                    });
+                }
+
                 const okUrls = new Set((data.formulariosDetalle || []).map((item: any) => item.url));
                 const errorMap = new Map((data.errores || []).map((item: any) => [item.url, item.error]));
 
@@ -701,58 +1230,15 @@ btnProcess.addEventListener('click', async () => {
 
     // Al finalizar, renderizar tabla
     try {
-        statTotal.textContent = currentResult.totalUrls.toString();
-        statOk.textContent = currentResult.procesadosExitosamente.toString();
-        statFiltered.textContent = (currentResult.formulariosDetalle?.length || 0).toString();
-        statError.textContent = currentResult.conErrores.toString();
-        
-        resultsContainer.classList.remove('hidden');
+        if (currentResult.estadisticasGlobalesFieldType) {
+            currentResult.estadisticasGlobalesFieldType.total = Object.values(currentResult.estadisticasGlobalesFieldType.porTipo)
+                .reduce((sum: number, count: any) => sum + (Number(count) || 0), 0);
+        }
 
-        jsonPreview.textContent = JSON.stringify(currentResult, null, 2);
+        renderResultsView();
 
-        // Preprocesar forms para crear `componentesData` que alimenta la tabla
-        currentResult.formulariosDetalle.forEach((form: any) => {
-            if (!form.componentesData) form.componentesData = {};
-            
-            // Recontar desde `componentesEncontrados`
-            if (form.componentesEncontrados) {
-                form.componentesEncontrados.forEach((c: any) => {
-                    const tipo = c.type || c.label || "unknown";
-                    form.componentesData[tipo] = (form.componentesData[tipo] || 0) + 1;
-                });
-            }
-            
-            // Recontar desde `tipoDocumentos` si se sacó especifico
-            if (form.tipoDocumentos) {
-                form.tipoDocumentos.forEach((c: any) => {
-                    const tipo = "Tipo_Documento_" + (c.key || c.label || "unknown");
-                    form.componentesData[tipo] = (form.componentesData[tipo] || 0) + 1;
-                });
-            }
-        });
-
-        // Render Formularios (Visualizador)
-        if (currentResult.formulariosDetalle && currentResult.formulariosDetalle.length > 0) {
-            formsCount.textContent = `${currentResult.formulariosDetalle.length} formularios filtrados`;
-
-            formsTableHead.innerHTML = `
-                <tr>
-                    <th class="px-3 py-2 whitespace-nowrap min-w-[150px]">Título de Formulario</th>
-                    <th class="px-3 py-2 whitespace-nowrap min-w-[200px]">URL Completa</th>
-                </tr>
-            `;
-
-            formsTableBody.innerHTML = currentResult.formulariosDetalle.map((form: any) => `
-                <tr class="hover:bg-gray-800 transition-colors border-b border-gray-700">
-                    <td class="px-3 py-2 font-medium text-xs">${form.title || form.titulo || form.formName || 'N/A'}</td>
-                    <td class="px-3 py-2 font-mono text-[9px] min-w-[200px] hover:overflow-visible relative"><div class="truncate max-w-[500px]"><a href="${form.url}" target="_blank" class="text-blue-400 hover:underline" title="${form.url}">${form.url}</a></div></td>
-                </tr>
-            `).join('');
-        } else {
-            formsCount.textContent = '0';
-            formsTableHead.innerHTML = '<tr><th colspan="2" class="px-3 py-2 border-b border-gray-700">Resultados</th></tr>';
-            formsTableBody.innerHTML = '<tr><td colspan="2" class="px-3 py-4 text-center text-gray-500 text-sm">No se pudieron procesar formularios válidos.</td></tr>';
-
+        if (filterSelect.value === 'fieldtype-search') {
+            syncFilterArgumentUI();
         }
 
         // Render Errores
@@ -781,8 +1267,9 @@ btnProcess.addEventListener('click', async () => {
 
 btnDownloadJson.addEventListener('click', () => {
     if (!currentResult) return;
-    
-    const blob = new Blob([JSON.stringify(currentResult, null, 2)], { type: 'application/json' });
+
+    const safeResult = buildExportResult(currentResult);
+    const blob = new Blob([JSON.stringify(safeResult, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     
     const a = document.createElement('a');
@@ -812,50 +1299,141 @@ btnDownloadTxt.addEventListener('click', () => {
 
 function generarCSV(data: any): string {
     if (!data || !data.formulariosDetalle) return "";
-    
-    const formularios = data.formulariosDetalle;
-    const todosLosTipos = new Set<string>();
-    formularios.forEach((form: any) => {
-        if(form.componentesData) {
-            Object.keys(form.componentesData).forEach(tipo => todosLosTipos.add(tipo));
-        }
-    });
-    
-    const tiposArray = Array.from(todosLosTipos).sort();
-    
-    const headers = [
-        "Path", 
-        "URL Completa", 
-        "Titulo", 
-        "Nombre Formulario (FormName)",
-        "Tiene Signature (Flag)",
-        "Signature Detectado (Value)",
-        ...tiposArray,
-        "Total Campos"
-    ];
-    
-    const rows = [headers.join(",")];
-    
-    formularios.forEach((form: any) => {
-        const row = [
-            `"${form.path || ''}"`,
-            `"${form.url || ''}"`,
-            `"${(form.titulo || '').replace(/"/g, '""')}"`,
-            `"${form.formName || ''}"`,
-            `"${form.tieneSignature ? 'SI' : 'NO'}"`,
-            `"${form.signatureDetectado || ''}"`
-        ];
-        
-        tiposArray.forEach(tipo => {
-            row.push(form.componentesData?.[tipo] || 0);
+
+    const safeData = sanitizeUnicodeSeparators(data) as any;
+    const formularios = safeData.formulariosDetalle;
+    const filterType = safeData.filterMeta?.type;
+
+    if (filterType === 'dropdown-with-terms') {
+        const headers = ['URL Completa', 'Titulo', 'Key', 'Label', 'Opciones'];
+        const rows = [headers.join(',')];
+
+        formularios.forEach((form: any) => {
+            const items = Array.isArray(form.tipoDocumentos) ? form.tipoDocumentos : [];
+            if (items.length === 0) {
+                rows.push([
+                    escapeCsvCell(form.url || ''),
+                    escapeCsvCell(form.title || ''),
+                    escapeCsvCell(''),
+                    escapeCsvCell(''),
+                    escapeCsvCell('')
+                ].join(','));
+                return;
+            }
+
+            items.forEach((item: any) => {
+                rows.push([
+                    escapeCsvCell(form.url || ''),
+                    escapeCsvCell(form.title || ''),
+                    escapeCsvCell(item.key || ''),
+                    escapeCsvCell(item.label || ''),
+                    escapeCsvCell(Array.isArray(item.enumNames) ? item.enumNames.join(' | ') : '')
+                ].join(','));
+            });
         });
-        
-        row.push(form.totalCampos || 0);
-        
-        rows.push(row.join(","));
+
+        return rows.join('\n');
+    }
+
+    if (filterType === 'all-fieldtypes-summary' || filterType === 'fieldtype-search') {
+        const todosLosTipos = new Set<string>();
+        formularios.forEach((form: any) => {
+            Object.keys(form.estadisticasFieldType?.porTipo || {}).forEach((tipo) => todosLosTipos.add(tipo));
+        });
+
+        const tiposArray = Array.from(todosLosTipos).sort();
+        const totalLabel = filterType === 'fieldtype-search' ? 'Total Coincidencias' : 'Total Campos';
+        const headers = ['URL Completa', 'Titulo', ...tiposArray, totalLabel];
+        const rows = [headers.join(',')];
+
+        formularios.forEach((form: any) => {
+            const statsByType = form.estadisticasFieldType?.porTipo || {};
+            const row = [
+                escapeCsvCell(form.url || ''),
+                escapeCsvCell(form.title || '')
+            ];
+
+            tiposArray.forEach((tipo) => row.push(String(statsByType[tipo] || 0)));
+            row.push(String(form.estadisticasFieldType?.total || 0));
+            rows.push(row.join(','));
+        });
+
+        return rows.join('\n');
+    }
+
+    const headers = ['URL Completa', 'Titulo', 'Key', 'Label', 'Tipo', 'Descripcion', 'Ruta'];
+    const rows = [headers.join(',')];
+
+    formularios.forEach((form: any) => {
+        const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+
+        if (components.length === 0) {
+            rows.push([
+                escapeCsvCell(form.url || ''),
+                escapeCsvCell(form.title || ''),
+                escapeCsvCell(''),
+                escapeCsvCell(''),
+                escapeCsvCell(''),
+                escapeCsvCell(''),
+                escapeCsvCell('')
+            ].join(','));
+            return;
+        }
+
+        components.forEach((component: any) => {
+            rows.push([
+                escapeCsvCell(form.url || ''),
+                escapeCsvCell(form.title || ''),
+                escapeCsvCell(component.key || ''),
+                escapeCsvCell(component.label || ''),
+                escapeCsvCell(component.type || ''),
+                escapeCsvCell(component.description || ''),
+                escapeCsvCell(component.sourcePath || '')
+            ].join(','));
+        });
     });
-    
-    return rows.join("\n");
+
+    return rows.join('\n');
+}
+
+function generarCSVDetallado(data: any): string {
+    if (!data || !data.formulariosDetalle) return "";
+
+    const safeData = sanitizeUnicodeSeparators(data) as any;
+    const formularios = safeData.formulariosDetalle;
+    const headers = ['URL Completa', 'Titulo', 'Key', 'Label', 'Tipo', 'Descripcion', 'Ruta'];
+    const rows = [headers.join(',')];
+
+    formularios.forEach((form: any) => {
+        const components = Array.isArray(form.componentesEncontrados) ? form.componentesEncontrados : [];
+
+        if (components.length === 0) {
+            rows.push([
+                escapeCsvCell(form.url || ''),
+                escapeCsvCell(form.title || ''),
+                escapeCsvCell(''),
+                escapeCsvCell(''),
+                escapeCsvCell(''),
+                escapeCsvCell(''),
+                escapeCsvCell('')
+            ].join(','));
+            return;
+        }
+
+        components.forEach((component: any) => {
+            rows.push([
+                escapeCsvCell(form.url || ''),
+                escapeCsvCell(form.title || ''),
+                escapeCsvCell(component.key || ''),
+                escapeCsvCell(component.label || ''),
+                escapeCsvCell(component.type || ''),
+                escapeCsvCell(component.description || ''),
+                escapeCsvCell(component.sourcePath || '')
+            ].join(','));
+        });
+    });
+
+    return rows.join('\n');
 }
 
 btnDownloadCsv.addEventListener('click', () => {
@@ -866,6 +1444,20 @@ btnDownloadCsv.addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `resumen-formularios-${new Date().getTime()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+
+btnDownloadCsvDetailed.addEventListener('click', () => {
+    if (!currentResult) return;
+    const csvString = generarCSVDetallado(currentResult);
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `detalle-formularios-${new Date().getTime()}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
